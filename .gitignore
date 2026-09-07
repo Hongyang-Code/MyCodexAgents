@@ -13,3 +13,23 @@ PaperReader/inputs/
 *.key
 .DS_Store
 Thumbs.db
+
+# TextReadable input and edited text stay local.
+TextReadable/inputs/
+TextReadable/outputs/
+
+# NewsChaser real news, sources, indexes and reviews stay local.
+NewsChaser/inputs/
+NewsChaser/outputs/
+
+# ResearchHotspotFollow papers, sources, history and reviews stay local.
+ResearchHotspotFollow/inputs/
+ResearchHotspotFollow/outputs/
+
+# ResearchFieldSurvey real inputs and artifacts stay local.
+ResearchFieldSurvey/inputs/
+ResearchFieldSurvey/outputs/
+
+# Reference PDF downloads and user-provided originals stay local.
+shared/references/ccf/*.pdf
+shared/references/ccf/history/
