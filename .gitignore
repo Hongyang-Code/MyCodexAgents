@@ -1,0 +1,15 @@
+# PaperReader materials and artifacts stay local.
+PaperReader/outputs/
+PaperReader/inputs/
+**/.cache/
+**/tmp/
+**/__pycache__/
+*.py[cod]
+**/.venv/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+Thumbs.db
