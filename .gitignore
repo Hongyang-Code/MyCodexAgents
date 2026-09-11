@@ -33,3 +33,7 @@ ResearchFieldSurvey/outputs/
 # Reference PDF downloads and user-provided originals stay local.
 shared/references/ccf/*.pdf
 shared/references/ccf/history/
+
+# PaperReviewer private manuscripts, revisions and review records stay local.
+PaperReviewer/inputs/
+PaperReviewer/outputs/

@@ -4,6 +4,7 @@
 
 | 智能体 | 用途 | 使用说明 |
 | --- | --- | --- |
+| PaperReviewer | 多智能体审稿、质疑裁决、论文修订及累计修改说明 | [使用说明](PaperReviewer/README.md) |
 | ResearchFieldSurvey | 至少20篇主干论文，方法路线、发展脉络与阅读路径 | [使用说明](ResearchFieldSurvey/README.md) |
 | ResearchHotspotFollow | 研究领域近一周新论文四线追踪，每篇一条，轻量评估和文字审校 | [ResearchHotspotFollow/README.md](ResearchHotspotFollow/README.md) |
 | NewsChaser | 指定时期的重要新闻简报，地区与领域双索引，事实核查及文字审校 | [NewsChaser/README.md](NewsChaser/README.md) |
