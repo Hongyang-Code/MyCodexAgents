@@ -37,3 +37,16 @@ shared/references/ccf/history/
 # PaperReviewer private manuscripts, revisions and review records stay local.
 PaperReviewer/inputs/
 PaperReviewer/outputs/
+
+# PPTMaker private materials, templates, generated decks and review artifacts.
+PPTMaker/inputs/
+PPTMaker/outputs/
+
+# XRWritting manuscripts, reference downloads and audit artifacts stay local.
+XRWritting/inputs/
+XRWritting/outputs/
+
+# PaperFigureAgent private input, generated figures, runtimes and task state.
+PaperFigureAgent/inputs/
+PaperFigureAgent/outputs/
+PaperFigureAgent/*.egg-info/

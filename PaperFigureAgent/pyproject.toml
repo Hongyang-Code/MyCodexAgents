@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paperfigure-agent"
+version = "0.1.0"
+description = "Host-guided scientific figures with editable native draw.io tools"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+materials = ["pypdf>=5,<7", "Pillow>=11,<13"]
+
+[project.scripts]
+paperfigure = "paperfigure.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["paperfigure*"]

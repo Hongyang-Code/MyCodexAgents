@@ -1,0 +1,2 @@
+# Core package uses Python standard library only.
+# Optional PDF/image readers: pip install -e ".[materials]" inside .venv.

@@ -4,6 +4,9 @@
 
 | 智能体 | 用途 | 使用说明 |
 | --- | --- | --- |
+| PaperFigureAgent | 从自然材料构建和局部编辑原生 draw.io 科研图，含布局、路由与分层验收 | [使用说明](PaperFigureAgent/README.md) |
+| XRWritting | 基于可追溯论文的李锡荣行文风格检查、保真改写与修改说明 | [使用说明](XRWritting/README.md) |
+| PPTMaker | 模板改制、材料重组与主题调研，制作可编辑PPT并逐页审核 | [使用说明](PPTMaker/README.md) |
 | PaperReviewer | 多智能体审稿、质疑裁决、论文修订及累计修改说明 | [使用说明](PaperReviewer/README.md) |
 | ResearchFieldSurvey | 至少20篇主干论文，方法路线、发展脉络与阅读路径 | [使用说明](ResearchFieldSurvey/README.md) |
 | ResearchHotspotFollow | 研究领域近一周新论文四线追踪，每篇一条，轻量评估和文字审校 | [ResearchHotspotFollow/README.md](ResearchHotspotFollow/README.md) |

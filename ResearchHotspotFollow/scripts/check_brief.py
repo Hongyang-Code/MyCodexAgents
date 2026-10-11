@@ -5,11 +5,40 @@ ROOT=Path(__file__).resolve().parents[2]
 spec=importlib.util.spec_from_file_location('paper_blocks',ROOT/'shared/scripts/paper_blocks.py')
 blocks=importlib.util.module_from_spec(spec); spec.loader.exec_module(blocks)
 GROUPS=['CCF及其他重要期刊会议','arXiv','Hugging Face','其他相关论文']
-FIELDS=blocks.FIELDS
+FIELDS=blocks.FIELDS+['与核心领域的联系']
+RELATION_PARTS=['联系类型','具体关联','证据状态','适用条件']
 
 def validate(text):
     text=text.replace('\r\n','\n').replace('\r','\n')
-    result=blocks.validate_blocks(text)
+    # Hidden examples cannot satisfy required scope or relation fields.
+    visible=[]; fence=None
+    for line in re.sub(r'<!--.*?-->', '', text, flags=re.S).splitlines():
+        marker=re.match(r'^ {0,3}(`{3,}|~{3,})',line)
+        if marker:
+            token=marker[1]
+            if fence is None: fence=token
+            elif token[0]==fence[0] and len(token)>=len(fence): fence=None
+            continue
+        if fence is None: visible.append(line)
+    text='\n'.join(visible)
+    result=blocks.validate_blocks(text, extra_fields=['与核心领域的联系'])
+    for paper in re.finditer(r'^### \[(P[0-9]+)\] [^\n]*\n(.*?)(?=^#{1,3} |\Z)',text,re.M|re.S):
+        pid,body=paper[1],paper[2]
+        meta=re.search(r'^\*\*基本信息：\*\* (.+)$',body,re.M)
+        categories=re.findall(r'(?:^|｜)追踪：([^｜\n]+)',meta[1]) if meta else []
+        if len(categories)!=1 or categories[0].strip() not in ('核心领域','相关领域'):
+            result['errors'].append(pid+': missing or invalid tracking category')
+            continue
+        if categories[0].strip()=='相关领域':
+            relation=re.search(r'^- \*\*与核心领域的联系：\*\* (.+)$',body,re.M)
+            value=relation[1] if relation else ''
+            for part in RELATION_PARTS:
+                found=re.findall(re.escape(part)+r'：([^；\n]+)',value)
+                if len(found)!=1 or not found[0].strip(' 。') or found[0].strip() in ('待填写','TODO'):
+                    result['errors'].append(pid+': missing or empty relation part '+part)
+            status=re.search(r'证据状态：([^；\n]+)',value)
+            if not status or not any(label in status[1] for label in ('已有验证','待验证设想')):
+                result['errors'].append(pid+': missing relation evidence status')
     headings=re.findall(r'^## (.+)$',text,re.M)
     if headings!=GROUPS+['覆盖与限制']: result['errors'].append('missing, repeated or unordered source headings')
     for group in GROUPS:
