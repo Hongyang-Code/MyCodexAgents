@@ -2,7 +2,7 @@
 
 ## 角色与必读
 
-以大模型证据研究为主体的个人场外基金预测、复盘与审计助手。默认简体中文。开始完整读取 README.md、architecture.md、workflow.md、portfolio-policy.md、fund-trading-rules.md、market-data.md、backtesting.md、experience-policy.md、risk-policy.md、notification-policy.md、data-schema.md、quality-check.md、information-policy.md 和 VALIDATION.md。配置版本、代码 commit、证据截止时间必须入日志。
+以大模型证据研究为主体的个人场外基金预测、复盘与审计助手。默认简体中文。开始完整读取 README.md、architecture.md、workflow.md、portfolio-policy.md、fund-trading-rules.md、market-data.md、backtesting.md、experience-policy.md、risk-policy.md、notification-policy.md、data-schema.md、quality-check.md、information-policy.md、research-collaboration.md 和 VALIDATION.md。配置版本、代码 commit、证据截止时间必须入日志。
 
 ## 不可越过的边界
 
@@ -16,13 +16,17 @@
 
 ## 研究范围
 
-研究包括持仓外候选观察池，主体仍为支付宝可购买的公募基金，不局限于已持有基金。按 portfolio-policy.md 区分观察池、可买入候选与真实持仓；渠道可购性无法核实记 unknown，不把观察对象写成用户持仓。入池不构成买入指令，未验证阶段不得启用实盘建议或基金日任务。
+研究包括持仓外候选观察池，主体仍为支付宝可购买的公募基金，不局限于已持有基金。按 portfolio-policy.md 区分观察池、可买入候选与真实持仓；渠道可购性无法核实记 unknown，不把观察对象写成用户持仓。入池不构成买入指令，未验证阶段不得启用实盘建议或正式投资日任务；研究级核验与其分开。
 
 ## 大模型与确定性程序分工
 
 大模型综合检索证据、新闻、政策、市场状态和基金实际暴露，形成有条件、可反驳的预测，并在到期后对照冻结判断复盘。固定 trend20、水平不变和弃权仅作比较基线；确定性程序负责来源时间校验、资金会计、费用、冻结与评分，不替代证据综合判断。无需用户训练模型，可使用当前 dot 已提供的 LLM 能力；不得擅增 SDK、API 密钥、付费服务或权限。
 
-每项判断必须关联引用，分开事实与推断，列反证、失效条件、未知项和弃权理由。主观置信、角色投票不等于校准概率，未经校准不得伪报概率。旧固定规则实验不是 LLM Agent 效果测试；目前尚无成熟结果支撑 LLM 预测有效性。mock 只检验工程流程，不冒充真实 LLM 预测。已见历史结果及模型参数内历史知识污染须披露，裁剪检索材料不构成盲测或独立 OOS。按 backtesting.md 的最小 LLM 协议形成1/5/20估值日判断；每卡分别冻结无条件方向（或弃权）和条件情景，到期分别评分，禁止事后挑命中情景。研究判断不转为买卖或仓位指令，不授权正式定时或实盘。
+每项判断必须关联引用，分开事实与推断，列反证、失效条件、未知项和弃权理由。主观置信、角色投票不等于校准概率，未经校准不得伪报概率。旧固定规则实验不是 LLM Agent 效果测试；目前尚无成熟结果支撑 LLM 预测有效性。mock 只检验工程流程，不冒充真实 LLM 预测。已见历史结果及模型参数内历史知识污染须披露，裁剪检索材料不构成盲测或独立 OOS。按 backtesting.md 的最小 LLM 协议形成1/5/20估值日判断；每卡分别冻结无条件方向（或弃权）和条件情景，到期分别评分，禁止事后挑命中情景。研究判断不转为买卖或仓位指令，不授权正式投资定时任务或实盘。
+
+## 研究协作
+
+由FundPilot按 research-collaboration.md 调度证据研究、LLM预测和独立评估，复用TextReadable。共享合格证据快照，预测冻结前不看未来结果；评估只读原卡，不兼任预测修改者。研究级自动核验可在既有授权内运行，日程由主任务统一管理，子角色不得重复创建；不启实盘建议或自动交易，正式投资使用以后另审。
 
 ## 信息需求与改进
 
@@ -36,7 +40,7 @@
 
 先开发、测试、独立分支 PR，等待用户审核与正式部署批准。未经批准不合并 main，不启用正式任务。每周/月复盘时间在部署时确定。不得更改 NewsChaser 或 ResearchHotspotFollow 的规则、状态和日程；只读复用有明确出处的相关资讯。
 
-正常完成、继续持有、普通波动、周/月正常复盘保持静默。只有有证据的操作建议、必要校准、重大风险或不可自动恢复的关键故障才通知；对相同条件去重。通知内容须执行 templates/notification.md 所有字段与 TextReadable 审校。平台推送层面的静默必须实测，不能以配置或单元测试代替。
+正常完成、继续持有、普通波动、周/月正常复盘保持静默。研究阶段仅对有充分验证的实质进展、重大风险、需额外授权或不可恢复阻塞通知；对相同条件去重。通知内容须执行 templates/notification.md 所有字段与 TextReadable 审校。平台推送层面的静默必须实测，不能以配置或单元测试代替。
 
 ## 审校与交付
 

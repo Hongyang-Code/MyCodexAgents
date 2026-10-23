@@ -19,6 +19,7 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 ## 文件与能力
 
 - AGENTS.md / workflow.md：完整目标流程与边界。
+- research-collaboration.md：证据研究、LLM预测、独立评估的最小接口与私有复盘闭环；角色定义不表示生产服务已部署。
 - architecture.md：TradingAgents、Qlib、FinRobot、FinRL 一手资料调研。
 - fundpilot/ledger.py、portfolio.py：追加事件与持仓投影。
 - information-policy.md / information.py：按用途的信息需求、事件时间与版本、预期差可比性和缺证据弃权；本地检查，尚未接入生产编排。
