@@ -94,3 +94,32 @@ p_up可为null；分位数只能三项都有或全部null。任一组缺失须�
 新增numeric_metrics及逐卡基金/期限指标，分开probability_n、quantile_n、成熟标签数、缺失数与覆盖率。Brier基线预先固定p_up=0.5；分位数基线另为q10=q50=q90=0的水平不变退化分布。两者是不同比较基线，均不拟合、不读未来特征、不按结果选择；每项基线仅与该项LLM可评分样本配对。旧方向基线不改。区间覆盖与宽度、pinball同时看；不能用扩大区间或少量命中宣称有效。
 
 主观预测是否校准须积累未来未见、合理非重叠样本并审查不确定性；本接口不做校准拟合、不提供小样本独立CI。输出calibration_proven、profitability_improved及trading_authorized均为false。已见历史仍非OOS；测量能力改进不等于策略或净收益改善。
+
+## 先保存、后核验的数值卡路径
+
+真实新批次可能只有数值预测，D0/Dh未核实，来源仅有捕获对象与真实取得时间。此时不造方向、日期、HTTP原件或精确发布时间，也不借历史模式绕过严格评分。独立pending_numeric只保存待核验材料，本轮未实现第二阶段绑定/评分。
+
+```bash
+PYTHONPATH=FundPilot python -m fundpilot.pending_numeric save \
+  --original /private/original-llm.json --record /private/capture-record.json \
+  --output /private/pending-new-batch
+PYTHONPATH=FundPilot python -m fundpilot.pending_numeric inspect --pending /private/pending-new-batch
+```
+
+original是已冻结LLM原JSON，任何结构均按原字节保存，不重写方向/概率/时间。capture-record是旁路机械映射，不是新一次LLM预测；必须先独立核对映射与原卡一致，mapping_review_ref引用该私有核对记录。代码验证映射数值和原件哈希，但不自动证明原件到映射的语义一致，也不证明LLM生成身份/模型版本。
+
+capture-record.json字段：
+
+- record_kind=pending_numeric_capture；producer=actual_llm（合成测试用synthetic_fixture）。
+- original_sha256为original文件原字节SHA256；model_ref、prompt_version、mapping_review_ref非空，模型细节未知用unknown。
+- generated_at为原LLM真实生成时间，information_cutoff为其资料截点，均带时区，不倒填冻结时刻。receipt另外记录本次actual_saved_at，不把保存时间冒充原先冻结时间。
+- numeric_schema=research_numeric_v1，new_batch_no_backfill=true；cards数组最多9张、最多3基金×3期限。每卡id、fund、horizon、source_ids、numeric_forecast（上一节schema），不要求direction；D0/Dh/origin/target可缺省或null，本入口拒绝填非空日期，避免暗中绑定。
+- sources数组1到12条：id、snapshot_kind=captured_object、hash_basis=json_sorted_compact_utf8、captured_object（实际捕获JSON对象）、object_sha256、真实retrieved_at/known_available_at、published_at（未知必须null）。日期精度原值可保留在captured_object内，不伪补精确时区时间。
+
+object_sha256仅针对上述captured_object的明确JSON表示计算：`json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')`后取SHA256；也可调用`fundpilot.pending_numeric.object_hash(obj)`。它不是原HTTP字节哈希。已有其他序列化方式的对象哈希原样保留为附加字段并注明原算法，不用新算法哈希替换旧记录。原件/旁路记录的文件字节哈希另由receipt保存。
+
+来源在截点后才实际取得、发布时间未知或无法确认版本时也可诚实保存，但一律source_qualification=pending，不能当作截点前合格证据。保存成功不是来源资格通过。
+
+输出original.json、capture-record.json及receipt.json，目录0700、文件0400；输出目录已存在就拒绝，不覆盖原件。inspect复核文件哈希、数值结构和pending状态。只读文件权限和本地哈希不构成不可篡改云存储，调用方须独立私有保留原始冻结记录及receipt；原资料和本次首次失败记录不删除。
+
+receipt与inspect始终给calendar_qualification=pending、source_qualification=pending、scoring_ready=false、scoring_implemented=false、independent_oos=false、trading_authorized=false。没有标签，不输出命中或损失。此保存目录不是旧严格freeze目录，不能直接送入旧score；未来只有独立核实来源资格、基金估值日历、D0/Dh及真实NAV并实现受审阅的绑定步骤后才可评分。现有严格入口原样保留，本轮不自动转接、不启用交易、不重置候选预算。
