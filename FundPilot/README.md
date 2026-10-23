@@ -33,6 +33,7 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 - storage.py：私有快照校验/安全恢复；云端上传及版本条件替换由已授权工具执行。
 - llm-loop.md / fundpilot/llm_loop.py：真实LLM卡先冻结、再用已核验NAV离线评分的小型CLI；不生成LLM判断，不证明投资效果。
 - decision-value.md / fundpilot/decision_value.py：复用会计内核的显式合成决策净价值比较CLI，含现金与买持基线；不支持真实执行收益声明。
+- conditional-value.md / fundpilot/conditional_value.py：独立只读的真实历史NAV与显式LLM分配条件估值，区分期末NAV、假设清算和现金；不放宽原事件门禁。
 - VALIDATION.md：实际测试、真实数据范围和未验收项。
 - history-batch.md：本地证据驱动的回顾性研究CLI、预测/72个固定策略情景及私有审计包；合成验证不代表真实半年研究已完成。
 
