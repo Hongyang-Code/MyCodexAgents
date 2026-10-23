@@ -90,7 +90,9 @@ def assess(purpose,subject,records,cutoff):
     # Expiry of a revision must not resurrect its superseded facts.
     superseded={r.supersedes for r in known if r.supersedes}
     facts=[r for r in visible if r.kind=='fact' and r.evidence_id not in superseded]
-    conflicts={r.topic for r in visible if r.conflicted is not False}
+    # Known unresolved conflicts survive expiry and ordinary version replacement.
+    # This schema has no reviewed resolution event: supersedes is not one.
+    conflicts={r.topic for r in known if r.conflicted is not False}
     missing=[topic for topic in REQUIREMENTS[purpose] if topic in conflicts or not any(r.topic==topic for r in facts)]
     return dict(purpose=purpose,subject=subject,status='abstain' if missing else 'evidence_ready_for_review',
                 missing=missing,evidence_ids=[r.evidence_id for r in facts],probability=None,

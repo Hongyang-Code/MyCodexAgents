@@ -64,6 +64,31 @@ class InformationTests(unittest.TestCase):
         self.assertIn('identity',assess('valuation',rows[0].subject,rows,self.cutoff)['missing'])
         self.assertEqual(self.surprise(expected=evidence(conflicted=True))['status'],'unknown')
 
+    def test_expired_conflict_with_valid_facts_stays_blocked(self):
+        rows=[evidence(evidence_id=t,topic=t) for t in ('identity','nav')]
+        rows.append(evidence(evidence_id='conflict',topic='nav',conflicted=True,
+                             valid_until='2026-01-03T00:00:00+00:00'))
+        result=assess('valuation',rows[0].subject,rows,self.cutoff)
+        self.assertEqual(result['status'],'abstain')
+        self.assertEqual(result['missing'],['nav'])
+
+    def test_revision_chain_does_not_imply_conflict_resolution(self):
+        old=evidence(evidence_id='conflict',topic='nav',conflicted=True,
+                     valid_until='2026-01-03T00:00:00+00:00')
+        corrected=evidence(evidence_id='corrected',topic='nav',supersedes=old.evidence_id,
+                           version='2',revised_at=self.cutoff,version_published_at=self.cutoff,
+                           retrieved_at=self.cutoff,reviewed_at=self.cutoff)
+        next_version=replace(corrected,evidence_id='latest',version='3',supersedes='corrected')
+        rows=[evidence(evidence_id='identity',topic='identity'),old,corrected,next_version]
+        self.assertEqual(assess('valuation',old.subject,rows,self.cutoff)['missing'],['nav'])
+
+    def test_future_or_other_subject_conflict_does_not_block(self):
+        rows=[evidence(evidence_id=t,topic=t) for t in ('identity','nav')]
+        future=evidence(evidence_id='future',topic='nav',conflicted=True,
+                        retrieved_at='2026-01-05T00:00:00+00:00',reviewed_at='2026-01-05T00:00:00+00:00')
+        other=evidence(evidence_id='other',subject='other-class',topic='nav',conflicted=True)
+        self.assertEqual(assess('valuation',rows[0].subject,rows+[future,other],self.cutoff)['missing'],[])
+
     def test_exposure_required_for_event_analysis(self):
         rows=[evidence(),evidence(evidence_id='identity',topic='identity')]
         self.assertEqual(assess('event_analysis',rows[0].subject,rows,self.cutoff)['missing'],['exposure'])

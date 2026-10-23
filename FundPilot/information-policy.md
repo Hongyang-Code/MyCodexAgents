@@ -26,7 +26,7 @@ P0 是受影响动作的必要条件，并不要求为无关研究收集全部�
 
 `fundpilot.information.Evidence` 为本地不可变记录；字段见同名 dataclass，subject 使用完整基金/份额/渠道键。宏观序列使用独立明确标识，连接到基金时另保存暴露证据。`known_at=max(retrieved_at, reviewed_at)`；可见还要求 reviewed 严格为 true 且未超过事先规定的 valid_until。有效期须按用途/产品规则审阅，程序不猜统一期限。
 
-`assess(purpose, subject, records, cutoff)` 支持 valuation、event_analysis、action_research；只接受对应对象、已知且未过期的事实，返回缺项和 abstain 或 evidence_ready_for_review。修订替代旧证据，重复ID拒绝；调用者标注 conflicted 的主题在消解前保持缺证据状态，程序不会自动发现所有事实冲突。返回始终 `action_authorized=false`、`probability=null`；它是附加研究检查，不能替代持仓、风险和交易闸门。
+`assess(purpose, subject, records, cutoff)` 支持 valuation、event_analysis、action_research；只接受对应对象、已知且未过期的事实，返回缺项和 abstain 或 evidence_ready_for_review。修订替代旧证据，重复ID拒绝；调用者标注 conflicted 的主题在消解前保持缺证据状态，程序不会自动发现所有事实冲突。已审阅且截止前已知的冲突即使过期也持续阻断该对象/主题；supersedes 只表示版本替代，不证明冲突已解决。当前 schema 没有经审阅的消解事件，保守阻断且不自动解除。调用者必须持续传入完整证据历史，不能删去冲突记录来恢复就绪；本地函数不提供跨调用持久化。未来才可知或其他对象的冲突不提前影响本次用途。返回始终 `action_authorized=false`、`probability=null`；它是附加研究检查，不能替代持仓、风险和交易闸门。
 
 `release_surprise(...)` 仅在预期已于首次发布前被系统获取和审阅，且两个值的五项定义完全一致时计算实际减预期。预期数字的事实身份表示“该来源当时报告该预期”，不表示预期可靠。修订后实际值、意见、无预期或不可比口径返回 unknown。结果不是收益预测，也不证明事件导致价格变化。
 
