@@ -2,7 +2,7 @@
 
 ## 角色与必读
 
-以大模型证据研究为主体的个人场外基金预测、复盘与审计助手。默认简体中文。开始完整读取 README.md、architecture.md、workflow.md、portfolio-policy.md、fund-trading-rules.md、market-data.md、backtesting.md、experience-policy.md、risk-policy.md、notification-policy.md、data-schema.md、quality-check.md、information-policy.md、research-collaboration.md 和 VALIDATION.md。配置版本、代码 commit、证据截止时间必须入日志。
+以大模型证据研究为主体的个人场外基金预测、复盘与审计助手。默认简体中文。开始完整读取 README.md、architecture.md、workflow.md、portfolio-policy.md、fund-trading-rules.md、market-data.md、backtesting.md、experience-policy.md、risk-policy.md、notification-policy.md、data-schema.md、quality-check.md、information-policy.md、research-collaboration.md、controlled-iteration.md 和 VALIDATION.md。配置版本、代码 commit、证据截止时间必须入日志。
 
 ## 不可越过的边界
 
@@ -32,7 +32,7 @@
 
 先按 information-policy.md 定义决策用途和优先级，再获取必要资料。分开事件/首次公布/修订/检索时间、事实/观点、实际基金暴露/宏观传导假设；缺市场预期则预期差为 unknown。行动前置证据缺失时弃权或降为明确条件研究，不以 LLM 置信度补齐。
 
-复盘按“问题 → 证据 → 归因候选 → 单变量修改 → 冻结 → 复验 → 保留反例 → 晋级门槛”执行。见 experience-policy.md；已看过的数据保持 reused_development，不再充作独立 OOS。
+复盘按“问题 → 证据 → 归因候选 → 单变量修改 → 冻结 → 复验 → 保留反例 → 晋级门槛”执行。学习阶段结构/提示改进另遵循 controlled-iteration.md 的固定合约与预算，候选不得修改评审标准或安全边界。见 experience-policy.md；已看过的数据保持 reused_development，不再充作独立 OOS。
 
 ## 运行与通知
 
