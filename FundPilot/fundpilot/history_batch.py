@@ -71,6 +71,8 @@ def protocol_check(p):
     starts = [date.fromisoformat(p[k]) for k in ('analysis_start','validation_end','test_start','analysis_end')]
     if not starts[0] <= starts[1] < starts[2] <= starts[3]:
         raise ValueError('invalid chronological splits')
+    if starts[2] != starts[1] + timedelta(days=1):
+        raise ValueError('validation and test boundaries must be contiguous')
     dates = p['installment_dates']
     if sorted(set(dates)) != dates or any(not starts[0] <= date.fromisoformat(d) <= starts[3] for d in dates):
         raise ValueError('installments outside analysis window')
@@ -257,10 +259,19 @@ def metrics(tape):
                     status_counts={s:sum(r['status']==s for r in rows) for s in ('scored','pending','purged','missing','abstain')},
                     level_mae=None,level_rmse=None,return_mae=None,direction_accuracy=None,
                     directional_call_count=0,directional_hit_rate=None,
+                    actual_direction_counts={'up':0,'flat':0,'down':0},
+                    fixed_direction_baseline_accuracy={'always_up':None,'always_flat':None,'always_down':None},
+                    retrospective_majority_class_share=None,
+                    majority_class_interpretation='Ex-post label distribution only; not a preselected model or evidence of skill.',
                     probability_calibration=None,confidence_interval=None,
                     uncertainty='No IID CI; nonoverlap is descriptive, not proof of independence.')
                 if selected:
                     calls=[r for r in selected if sign(r['predicted_return'])!=0]
+                    counts={name:sum(sign(r['actual_return'])==label for r in selected)
+                            for name,label in (('up',1),('flat',0),('down',-1))}
+                    item.update(actual_direction_counts=counts,
+                        fixed_direction_baseline_accuracy={'always_'+k:v/len(selected) for k,v in counts.items()},
+                        retrospective_majority_class_share=max(counts.values())/len(selected))
                     item.update(level_mae=statistics.mean(abs(r['level_error']) for r in selected),
                         level_rmse=math.sqrt(statistics.mean(r['level_error']**2 for r in selected)),
                         return_mae=statistics.mean(abs(r['return_error']) for r in selected),

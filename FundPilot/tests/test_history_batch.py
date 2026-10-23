@@ -97,6 +97,38 @@ class HistoryBatchTests(unittest.TestCase):
         self.p['models'].append('tuned_best')
         with self.assertRaises(ValueError): protocol_check(self.p)
 
+    def test_split_gap_rejected(self):
+        self.p['test_start']='2026-06-02'
+        with self.assertRaisesRegex(ValueError,'contiguous'): protocol_check(self.p)
+
+    def test_direction_baselines_use_identical_eligible_origins(self):
+        rows=[]
+        for i,actual in enumerate((.1,-.1,0,.2,-.2)):
+            rows.append(dict(instrument='SYNTH',horizon=2,information_lag=1,model='trend20',split='test',
+                origin=f'2026-06-{i+1:02}',origin_index=i,status='scored',
+                ex_post_eligible=True,cutoff_known_eligible=i<3,
+                actual_return=actual,predicted_return=.1,level_error=0,return_error=.1-actual))
+        rows.append(dict(rows[0],origin='2026-06-06',origin_index=5,status='pending',
+                         ex_post_eligible=False,cutoff_known_eligible=False,actual_return=999))
+        stats=metrics(rows)
+        all_rows=next(r for r in stats if r['scope']=='ex_post' and r['sample']=='all_overlapping')
+        self.assertEqual(all_rows['actual_direction_counts'],{'up':2,'flat':1,'down':2})
+        self.assertEqual(all_rows['fixed_direction_baseline_accuracy'],{'always_up':.4,'always_flat':.2,'always_down':.4})
+        nonoverlap=next(r for r in stats if r['scope']=='ex_post' and r['sample']=='fixed_nonoverlap')
+        self.assertEqual(nonoverlap['actual_direction_counts'],{'up':1,'flat':1,'down':1})
+        known=next(r for r in stats if r['scope']=='cutoff_known' and r['sample']=='all_overlapping')
+        self.assertEqual(known['n'],3)
+        self.assertEqual(known['retrospective_majority_class_share'],1/3)
+
+    def test_empty_direction_sample_has_no_baseline_accuracy(self):
+        rows=[dict(instrument='SYNTH',horizon=1,information_lag=1,model='abstain',split='test',
+                   origin='2026-06-01',origin_index=0,status='abstain',
+                   ex_post_eligible=False,cutoff_known_eligible=False)]
+        for r in metrics(rows):
+            self.assertEqual(r['actual_direction_counts'],{'up':0,'flat':0,'down':0})
+            self.assertTrue(all(v is None for v in r['fixed_direction_baseline_accuracy'].values()))
+            self.assertIsNone(r['retrospective_majority_class_share'])
+
     def test_future_prices_not_used_in_features(self):
         a=self.assets['SYNTH-A'];d=date(2026,4,15)
         expected=estimates(a,d,3,'trend20',20)
