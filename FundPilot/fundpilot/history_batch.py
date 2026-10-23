@@ -22,6 +22,44 @@ import zipfile
 
 MODELS = ('abstain', 'persistence', 'trend20')
 STRATEGIES = ('buy_hold', 'installments', 'monthly_rebalance', 'trend20')
+CONDITIONAL_SCOPE = 'conditional_raw_nav_no_distribution_no_split'
+CONDITIONAL_ASSUMPTION = 'no_cash_distributions_and_no_splits'
+
+
+def conditional_metadata(assets, p, assumptions, unknown_evidence):
+    if p.get('retrospective') is not True:
+        raise ValueError('conditional scenarios must be retrospective')
+    if list(assumptions) != [CONDITIONAL_ASSUMPTION]:
+        raise ValueError('explicit no_cash_distributions_and_no_splits assumption required')
+    if not isinstance(unknown_evidence,list) or not unknown_evidence or any(not isinstance(x,str) or not x.strip() for x in unknown_evidence):
+        raise ValueError('explicit unknown_evidence descriptions required')
+    for a in assets.values():
+        if a.get('distribution_status') not in ('unknown','verified_none') or a.get('split_status','unknown') not in ('unknown','verified_none'):
+            raise ValueError('known distribution/split conflicts with conditional assumption')
+        for key in ('known_distribution_events','known_split_events'):
+            if not isinstance(a.get(key),list):
+                raise ValueError('explicit known-event lists required: '+key)
+            if a[key]:
+                raise ValueError('known distribution/split conflicts with conditional assumption')
+    return {'scope':CONDITIONAL_SCOPE,'retrospective':True,
+        'not_actual_fund_total_return':True,'not_executable':True,
+        'unknown_evidence':list(unknown_evidence),'assumptions':list(assumptions),
+        'source_distribution_status':{c:a.get('distribution_status') for c,a in assets.items()},
+        'interpretation':'Conditional raw NAV price path only; distributions affect signals and cash. No actual strategy-ranking claim.'}
+
+
+def scoped_output(value, metadata):
+    """Tag generated tables without changing original evidence or numerical inputs."""
+    if not metadata: return value
+    if isinstance(value,list):
+        return [scoped_output(row,metadata) for row in value] if value else dict(metadata,records=[])
+    if isinstance(value,dict):
+        result=dict(value)
+        if 'scope' in result and result['scope']!=CONDITIONAL_SCOPE:
+            result['evaluation_scope']=result.pop('scope')
+        result.update(metadata)
+        return result
+    return value
 
 
 def digest(data):
@@ -282,11 +320,13 @@ def metrics(tape):
     return result
 
 
-def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps):
+def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
+             conditional_nav_scenarios=False,assumptions=(),unknown_evidence=None):
     """Closed synthetic pool with future-price orders and delayed resource release."""
     if strategy not in STRATEGIES:
         raise ValueError('unknown strategy')
-    if any(a.get('distribution_status')!='verified_none' for a in assets.values()):
+    metadata=conditional_metadata(assets,p,assumptions,unknown_evidence) if conditional_nav_scenarios else None
+    if not conditional_nav_scenarios and any(a.get('distribution_status')!='verified_none' for a in assets.values()):
         raise ValueError('strategies require reviewed no-distribution/no-split coverage')
     common=sorted(set.intersection(*(set(a['dealing_sessions']) for a in assets.values())))
     start,end=(date.fromisoformat(p[k]) for k in ('analysis_start','analysis_end'))
@@ -421,7 +461,7 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps):
             split_returns[name]={'start_carried_equity':str(previous),'end_equity':str(final),
                 'return':float(final/previous-1),'new_cash':0,'last_valuation_date':selected[-1]['date']}
             previous=final
-    return {'strategy':strategy,'information_lag':information_lag,'settlement_lag':settlement_lag,'cost_bps':cost_bps,
+    result={'strategy':strategy,'information_lag':information_lag,'settlement_lag':settlement_lag,'cost_bps':cost_bps,
             'initial_cash':p['initial_cash'],'terminal_equity':str(terminal),'available_cash':str(cash),
             'reserved_cash':last['reserved_cash'],'receivables':last['receivables'],'fees_paid':str(fees),
             'return':float(terminal/D(str(p['initial_cash']))-1),'max_drawdown':float(mdd),
@@ -430,6 +470,11 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps):
             'split_returns':split_returns,
             'liquidatable_return':None,'execution_claim':'hypothetical_future_NAV_and_settlement_scenario',
             'transactions':trades,'daily_assets':daily}
+    if metadata:
+        result.update(metadata)
+        result['transactions']=scoped_output(trades,metadata)
+        result['daily_assets']=scoped_output(daily,metadata)
+    return result
 
 
 def serial(x):
@@ -452,11 +497,29 @@ def write_csv(path,rows):
     path.chmod(0o600)
 
 
-def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supplement_path=None,supplement_sha=None):
+def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supplement_path=None,supplement_sha=None,
+        conditional_nav_scenarios=False,assumptions=(),conditional_addendum=None,conditional_addendum_sha=None):
     protocol_bytes=Path(protocol_path).read_bytes()
     if digest(protocol_bytes)!=protocol_sha: raise ValueError('frozen protocol hash mismatch')
     p=json.loads(protocol_bytes);protocol_check(p)
     config,assets,blobs=load_input(input_path,p)
+    if conditional_nav_scenarios and predictions_only:
+        raise ValueError('conditional scenarios and predictions-only are separate modes')
+    if assumptions and not conditional_nav_scenarios:
+        raise ValueError('assumptions require explicit conditional mode')
+    metadata=conditional_metadata(assets,p,assumptions,config.get('conditional_unknown_evidence')) if conditional_nav_scenarios else None
+    addendum_bytes=None
+    if conditional_addendum:
+        if not conditional_nav_scenarios: raise ValueError('conditional addendum requires conditional mode')
+        addendum_bytes=Path(conditional_addendum).read_bytes();addendum=json.loads(addendum_bytes)
+        if (digest(addendum_bytes)!=conditional_addendum_sha or addendum.get('protocol_v2_sha256')!=protocol_sha
+                or addendum.get('scope')!=CONDITIONAL_SCOPE or addendum.get('assumptions')!=list(assumptions)
+                or not addendum.get('registration_timing')):
+            raise ValueError('conditional addendum hash, protocol link or disclosure mismatch')
+    elif conditional_nav_scenarios and not config['synthetic']:
+        raise ValueError('real conditional run requires frozen conditional addendum')
+    def save_json(path,value): write_json(path,scoped_output(value,metadata))
+    def save_csv(path,rows): write_csv(path,[scoped_output(r,metadata) for r in rows])
     supplement_bytes=None
     if supplement_path:
         supplement_bytes=Path(supplement_path).read_bytes()
@@ -474,10 +537,13 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
     if supplement_bytes:
         (output/'protocol-calendar-supplement.json').write_bytes(supplement_bytes)
         (output/'protocol-calendar-supplement.json').chmod(0o600)
-    write_json(output/'input-manifest.json',config)
+    if addendum_bytes:
+        (output/'protocol-conditional-addendum.json').write_bytes(addendum_bytes)
+        (output/'protocol-conditional-addendum.json').chmod(0o600)
+    save_json(output/'input-manifest.json',config)
     replay=json.loads(json.dumps(config))
     for item in replay['files'].values(): item['path']='evidence/'+item['sha256']
-    write_json(output/'replay-input.json',replay)
+    save_json(output/'replay-input.json',replay)
     raw=output/'evidence';raw.mkdir(mode=0o700)
     for ref,data in blobs.items():
         target=raw/digest(data);target.write_bytes(data);target.chmod(0o600)
@@ -492,9 +558,10 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
     for f in (repo/'FundPilot/fundpilot').glob('*.py'):
         target=source_dir/f.name;target.write_bytes(f.read_bytes());target.chmod(0o600)
     provenance={'commit':git_sha,'working_tree_dirty':dirty,'source_sha256':source_hashes,
-        'protocol_sha256':protocol_sha,'supplement_sha256':supplement_sha,'created_at':datetime.now(timezone.utc).isoformat(),
+        'protocol_sha256':protocol_sha,'supplement_sha256':supplement_sha,'conditional_addendum_sha256':conditional_addendum_sha,
+        'created_at':datetime.now(timezone.utc).isoformat(),
         'synthetic':config['synthetic'],'retrospective':True,'production_enabled':False}
-    write_json(output/'provenance.json',provenance)
+    save_json(output/'provenance.json',provenance)
     try:
         quality=[]
         for c,a in assets.items():
@@ -505,15 +572,15 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
                 retrieved_at=a['source']['retrieved_at'],known_available_at=a['source']['known_available_at'],
                 retrieved_after_vintage_cutoff=timestamp(a['source']['retrieved_at'])>timestamp(p['vintage_evidence_cutoff']),
                 channel_limitations=a['channel_limitations']))
-        write_json(output/'data-quality.json',quality)
+        save_json(output/'data-quality.json',quality)
         tape=forecast_tape(assets,p)
         frozen_keys=('instrument','share_class','origin','origin_index','target','horizon','information_lag','model',
             'split','retrospective','basis','retrieved_at','known_available_at','source_sha256','feature_status',
             'feature_reason','anchor_date','anchor_nav','assumed_available_at','decision_level_estimate',
             'target_level_estimate','predicted_return','probability','calibration')
-        write_json(output/'frozen-predictions.json',[{k:r[k] for k in frozen_keys if k in r} for r in tape])
-        write_json(output/'predictions.json',tape);write_csv(output/'predictions.csv',tape)
-        stats=metrics(tape);write_json(output/'metrics.json',stats);write_csv(output/'metrics.csv',stats)
+        save_json(output/'frozen-predictions.json',[{k:r[k] for k in frozen_keys if k in r} for r in tape])
+        save_json(output/'predictions.json',tape);save_csv(output/'predictions.csv',tape)
+        stats=metrics(tape);save_json(output/'metrics.json',stats);save_csv(output/'metrics.csv',stats)
         summaries=[]
         if not predictions_only:
             for strategy in STRATEGIES:
@@ -522,16 +589,16 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
                         for cost in p['cost_bps']:
                             with localcontext() as ctx:
                                 ctx.prec=40
-                                result=simulate(assets,p,strategy,lag,settlement,cost)
+                                result=simulate(assets,p,strategy,lag,settlement,cost,conditional_nav_scenarios,assumptions,config.get('conditional_unknown_evidence'))
                             name=f'{strategy}-lag{lag}-settle{settlement}-cost{cost}'
-                            write_json(output/(name+'-transactions.json'),result.pop('transactions'))
-                            write_json(output/(name+'-daily-assets.json'),result.pop('daily_assets'))
+                            save_json(output/(name+'-transactions.json'),result.pop('transactions'))
+                            save_json(output/(name+'-daily-assets.json'),result.pop('daily_assets'))
                             summaries.append(result)
         baselines={(s['information_lag'],s['settlement_lag'],s['cost_bps']):s for s in summaries if s['strategy']=='buy_hold'}
         for s in summaries:
             base=baselines[(s['information_lag'],s['settlement_lag'],s['cost_bps'])]
             s['excess_return_vs_buy_hold']=s['return']-base['return']
-        write_json(output/'strategies.json',summaries);write_csv(output/'strategies.csv',summaries)
+        save_json(output/'strategies.json',summaries);save_csv(output/'strategies.csv',summaries)
         experiences=[]
         for code in assets:
             for h in p['horizons']:
@@ -560,8 +627,8 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
                 applicability='Frozen universe, synthetic budget and execution assumptions only',
                 invalidation='Fails in forward data, actual fees, dealing limits or longer settlement delays',
                 conclusion='未证明稳定优势；禁止自动升级为交易规则'))
-        write_json(output/'experience-candidates.json',experiences)
-        write_json(output/'data-dictionary.json',{
+        save_json(output/'experience-candidates.json',experiences)
+        save_json(output/'data-dictionary.json',{
             'prediction_basis':'raw_nav; no dividend-adjusted prediction claim',
             'actual_return':'target NAV / decision-day NAV - 1; scoring only',
             'predicted_return':'estimated target level / independently estimated decision level - 1',
@@ -577,25 +644,29 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
             selected=[r for r in stats if r['instrument']==c and r['model']=='persistence' and r['horizon']==1 and r['information_lag']==1 and r['split']=='test' and r['scope']=='ex_post' and r['sample']=='all_overlapping']
             if selected: best.append(f"- {c}：固定水平不变模型，1日目标/1日假设延迟，测试集有效样本 {selected[0]['n']}；MAE {selected[0]['level_mae']}。")
         report=('合成验证批次，不能解释为市场研究。\n\n' if config['synthetic'] else '当前版本历史数据的回顾性研究，不是严格历史可得回测。\n\n')
+        if metadata:
+            report+='条件研究边界：'+json.dumps(metadata,ensure_ascii=False)+'\n\n'
+            report+='分红/拆分证据完整性未知，默认严格门槛未通过。本模式仅假设无现金分红及无拆分，分红可能同时改变信号和现金，不能据此判断真实策略优劣。\n\n'
         report+=f"观察窗口：{p['analysis_start']}—{p['analysis_end']}。原资料截止：{p['original_information_cutoff']}；修订取证截止：{p['vintage_evidence_cutoff']}。\n\n"
         report+='\n'.join(best)+'\n\n'
         report+=f'完整预测记录 {len(tape)} 条；固定策略情景 {len(summaries)} 个。全部结果均已保存，不按收益择优报告。\n\n'
         for strategy in STRATEGIES:
             rows=[s for s in summaries if s['strategy']==strategy]
             if rows:
-                report+=f"- {strategy}：18个共同情景的账面收益范围 {min(s['return'] for s in rows):.4%} 至 {max(s['return'] for s in rows):.4%}。范围是敏感性结果，不是概率区间。\n"
+                label='条件NAV价格路径账面变化' if metadata else '账面收益'
+                report+=f"- {strategy}：18个共同情景的{label}范围 {min(s['return'] for s in rows):.4%} 至 {max(s['return'] for s in rows):.4%}。范围是敏感性结果，不是概率区间。\n"
         report+='\n'
         report+='信息延迟1/3/5日是假设，不能证明QDII真实披露时间；当前数据可能晚于取证截止，详见质量记录。事后评分与截止已知评分分别输出。5/20日期限存在重叠，非重叠子样本也不保证独立，不提供独立同分布置信区间或无依据概率校准。\n\n'
         report+='策略使用封闭合成初始资金、下一共同开放日未知净值计价、延迟确认/到账和双边成本压力情景。无强制期末卖出，终值包括冻结/未到账资产，现金单列。费用不是支付宝实际报价。历史渠道状态、限购、产品取整仍未知，不能声称可执行收益。\n\n'
-        report+='本批次未证明稳定预测或交易优势。经验只保留候选及反例，不升级规则。缺分红证据时只允许净值水平预测诊断，策略比较失败关闭。没有真实交易、通知或正式定时任务。\n'
+        report+='本批次未证明稳定预测或交易优势。经验只保留候选及反例，不升级规则。默认严格策略门槛不接受未知分红证据；显式条件模式不代表该门槛通过。没有真实交易、通知或正式定时任务。\n'
         (output/'report.txt').write_text(report,encoding='utf-8');(output/'report.txt').chmod(0o600)
-        write_json(output/'run-status.json',{'status':'completed','market_result':not config['synthetic'],
+        save_json(output/'run-status.json',{'status':'completed','market_result':not config['synthetic'],
             'predictions_only':predictions_only,'strategy_scenarios':len(summaries),'proven_efficacy':False})
     except Exception as exc:
-        write_json(output/'run-status.json',{'status':'failed','error':str(exc),'proven_efficacy':False})
+        save_json(output/'run-status.json',{'status':'failed','error':str(exc),'proven_efficacy':False})
         raise
     members={str(f.relative_to(output)):digest(f.read_bytes()) for f in output.rglob('*') if f.is_file()}
-    write_json(output/'audit-manifest.json',members)
+    save_json(output/'audit-manifest.json',{'files':members} if metadata else members)
     archive=output/'audit.zip'
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z:
         for f in sorted(output.rglob('*')):
@@ -604,8 +675,8 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
     with zipfile.ZipFile(archive) as z:
         for name,sha in members.items():
             if digest(z.read(name))!=sha: raise AssertionError('archive readback mismatch')
-    return {'output':str(output),'archive':str(archive),'archive_sha256':digest(archive.read_bytes()),
-            'predictions':len(tape),'strategy_scenarios':len(summaries),'synthetic':config['synthetic']}
+    return scoped_output({'output':str(output),'archive':str(archive),'archive_sha256':digest(archive.read_bytes()),
+            'predictions':len(tape),'strategy_scenarios':len(summaries),'synthetic':config['synthetic']},metadata)
 
 
 def main():
@@ -613,8 +684,11 @@ def main():
     for arg in ('input','protocol','protocol-sha256','output'): parser.add_argument('--'+arg,required=True)
     parser.add_argument('--predictions-only',action='store_true',help='raw NAV diagnostics; no strategy comparison')
     parser.add_argument('--supplement');parser.add_argument('--supplement-sha256')
+    parser.add_argument('--conditional-nav-scenarios',action='store_true')
+    parser.add_argument('--assumption',action='append',default=[],choices=[CONDITIONAL_ASSUMPTION])
+    parser.add_argument('--conditional-addendum');parser.add_argument('--conditional-addendum-sha256')
     args=parser.parse_args()
-    print(json.dumps(run(args.input,args.protocol,args.protocol_sha256,args.output,args.predictions_only,args.supplement,args.supplement_sha256),ensure_ascii=False))
+    print(json.dumps(run(args.input,args.protocol,args.protocol_sha256,args.output,args.predictions_only,args.supplement,args.supplement_sha256,args.conditional_nav_scenarios,args.assumption,args.conditional_addendum,args.conditional_addendum_sha256),ensure_ascii=False))
 
 
 if __name__=='__main__': main()

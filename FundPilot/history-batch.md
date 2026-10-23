@@ -73,6 +73,31 @@ NAV CSV表头必须恰为 `date,nav`，日期为ISO格式，净值为有限正�
 
 当前策略驱动只支持审阅后确认所用历史至观察窗末无分红、无拆分的区间。`distribution_status=verified_none` 必须有证据引用和覆盖起止日期。存在分红/拆分或证据未知时，完整策略运行失败关闭；不得借修改标签绕过。可选择明确的净值预测诊断模式，或先开发并独立验证有证据的分红事件处理。此限制是实现范围，不是宣称基金从未分红。
 
+## 独立条件性NAV路径模式
+
+默认严格门槛保持不变。只有显式选择 `--conditional-nav-scenarios --assumption no_cash_distributions_and_no_splits`，才允许在证据完整性未知时计算条件性原始NAV路径情景。不能与 `--predictions-only` 同用，协议必须 `retrospective=true`。该解释层不改变基金集合、模型、参数、日期、费用或72个策略情景，不把未知证据升级为已核实。
+
+真实条件批次还必须传入 `--conditional-addendum PATH --conditional-addendum-sha256 SHA`，附录要包含匹配的 `protocol_v2_sha256`、`scope=conditional_raw_nav_no_distribution_no_split`、`assumptions=["no_cash_distributions_and_no_splits"]` 及非空 `registration_timing`。附录必须如实披露：策略收益计算前新增，但prediction-only已开始且已见部分结果，不能宣称在所有市场结果之前预注册。原v2及日历补充文件不改写。
+
+输入顶层增加 `conditional_unknown_evidence` 非空字符串列表，逐项说明尚未核实的分红、拆分及期间完整性。每只基金保留原 `distribution_status=unknown`，可用 `split_status=unknown`，必须明确提供 `known_distribution_events` 和 `known_split_events` 两个列表。这些列表记录所用历史/窗口内已知事件；只要任一非空，或状态明确存在分红/拆分，就拒绝条件假设。空列表仅表示未发现已知事件，不是完整无事件证明。资料审阅者负责录入已知事实，程序不自动理解PDF。不要删去事实以通过门槛。
+
+交易表、日资产、汇总、经验、CSV、报告、输入/输出清单及回执均带：
+
+```json
+{
+  "scope": "conditional_raw_nav_no_distribution_no_split",
+  "retrospective": true,
+  "not_actual_fund_total_return": true,
+  "not_executable": true,
+  "unknown_evidence": ["如实记录证据完整性缺口"],
+  "assumptions": ["no_cash_distributions_and_no_splits"]
+}
+```
+
+JSON列表的每行包含标签；空表使用含标签及 `records: []` 的对象。指标原有ex_post/cutoff_known分类在该模式下改存 `evaluation_scope`，`scope` 专用于条件边界。`audit-manifest.json` 在条件模式下为带标签及 `files` 哈希映射的对象，默认模式保持原映射格式。原协议与原始证据字节保持原样，不能为加标签破坏证据哈希。
+
+数值字段沿用原schema以便逐项比较；条件模式的 `return` 仅指该假设下的账面NAV价格路径变化，`max_drawdown` 是条件账面回撤，`fees_paid` 是假设费用，`excess_return_vs_buy_hold` 仅是完全相同条件下的差值。不得解释为实际基金总回报、实际净收益、可实现alpha、真实风险调整盈利或实际持有期费率。分红可能改变信号和现金两端，条件结果不能证明真实策略优劣。经验保持候选，不晋级。
+
 ## 固定计算与边界
 
 模型是弃权、水平不变、20估值间隔固定趋势；不训练参数、不搜索模型。训练期之前的历史用于初始化，滚动特征只能访问假设可得数据。信息延迟为1/3/5个核实估值间隔，不声称是实际披露时间或QDII的保守上界。假设可得视图时刻为北京时间21:30。

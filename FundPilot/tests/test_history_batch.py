@@ -14,7 +14,7 @@ import unittest
 import zipfile
 
 from fundpilot.history_batch import (digest, estimates, forecast_tape, load_input,
-                                    metrics, protocol_check, run, simulate)
+                                    metrics, protocol_check, run, simulate, CONDITIONAL_SCOPE, CONDITIONAL_ASSUMPTION)
 
 
 def fixture(root):
@@ -303,6 +303,88 @@ class HistoryBatchTests(unittest.TestCase):
         s=self.root/'supplement.json';s.write_text(json.dumps({'supplement_to_sha256':'bad'}))
         with self.assertRaisesRegex(ValueError,'supplement hash/link'):
             run(self.root/'input.json',self.root/'protocol.json',self.sha,self.root/'out',False,s,digest(s.read_bytes()))
+
+    def conditional_assets(self):
+        for a in self.assets.values():
+            a.update(distribution_status='unknown',split_status='unknown',
+                     known_distribution_events=[],known_split_events=[])
+
+    def test_conditional_requires_explicit_assumption_and_retrospective(self):
+        self.conditional_assets()
+        with self.assertRaisesRegex(ValueError,'distribution'): self.simulate()
+        with self.assertRaisesRegex(ValueError,'explicit no_cash'):
+            simulate(self.assets,self.p,'buy_hold',1,1,0,True,(),['unknown distribution completeness'])
+        p=dict(self.p,retrospective=False)
+        with self.assertRaisesRegex(ValueError,'retrospective'):
+            simulate(self.assets,p,'buy_hold',1,1,0,True,[CONDITIONAL_ASSUMPTION],['unknown'])
+
+    def test_conditional_conflicts_rejected(self):
+        self.conditional_assets()
+        for key in ('known_distribution_events','known_split_events'):
+            self.assets['SYNTH-A'][key]=[{'date':'2026-04-01','evidence':'synthetic-known-fact'}]
+            with self.assertRaisesRegex(ValueError,'conflicts'):
+                simulate(self.assets,self.p,'buy_hold',1,1,0,True,[CONDITIONAL_ASSUMPTION],['unknown'])
+            self.assets['SYNTH-A'][key]=[]
+        self.assets['SYNTH-A']['distribution_status']='verified_cash'
+        with self.assertRaisesRegex(ValueError,'conflicts'):
+            simulate(self.assets,self.p,'buy_hold',1,1,0,True,[CONDITIONAL_ASSUMPTION],['unknown'])
+
+    def test_conditional_same_numeric_scenarios_and_preserves_unknown(self):
+        strict={}
+        for strategy in ('buy_hold','installments','monthly_rebalance','trend20'):
+            for lag in (1,3,5):
+                for settlement in (1,3):
+                    for cost in (0,20,100):
+                        key=(strategy,lag,settlement,cost)
+                        strict[key]=simulate(self.assets,self.p,*key)
+        self.conditional_assets()
+        for key,baseline in strict.items():
+            result=simulate(self.assets,self.p,*key,True,[CONDITIONAL_ASSUMPTION],['incomplete distribution evidence'])
+            for field in ('terminal_equity','available_cash','return','max_drawdown','fees_paid','split_returns'):
+                self.assertEqual(result[field],baseline[field])
+            self.assertEqual(result['scope'],CONDITIONAL_SCOPE)
+        self.assertTrue(all(a['distribution_status']=='unknown' for a in self.assets.values()))
+
+    def test_conditional_cli_labels_every_generated_table_and_manifest(self):
+        for a in self.config['instruments']:
+            a.update(distribution_status='unknown',split_status='unknown',known_distribution_events=[],known_split_events=[])
+        self.config['conditional_unknown_evidence']=['Synthetic: post-period distribution/split completeness unknown.']
+        self.save_config();output=self.root/'conditional'
+        cmd=[sys.executable,'-m','fundpilot.history_batch','--input',str(self.root/'input.json'),
+            '--protocol',str(self.root/'protocol.json'),'--protocol-sha256',self.sha,'--output',str(output),
+            '--conditional-nav-scenarios','--assumption',CONDITIONAL_ASSUMPTION]
+        result=subprocess.run(cmd,text=True,capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        receipt=json.loads(result.stdout);self.assertEqual(receipt['strategy_scenarios'],72)
+        for f in output.glob('*.json'):
+            if f.name=='protocol.json': continue  # Frozen original bytes deliberately unchanged.
+            obj=json.loads(f.read_text());rows=obj if isinstance(obj,list) else [obj]
+            for row in rows:
+                self.assertEqual(row['scope'],CONDITIONAL_SCOPE,f.name)
+                self.assertTrue(row['not_actual_fund_total_return'],f.name)
+                self.assertTrue(row['not_executable'],f.name)
+                self.assertEqual(row['assumptions'],[CONDITIONAL_ASSUMPTION],f.name)
+                self.assertTrue(row['unknown_evidence'],f.name)
+        for f in output.glob('*.csv'):
+            with f.open() as stream:
+                for row in csv.DictReader(stream): self.assertEqual(row['scope'],CONDITIONAL_SCOPE,f.name)
+        self.assertIn(CONDITIONAL_SCOPE,(output/'report.txt').read_text())
+        self.assertIn('不能据此判断真实策略优劣',(output/'report.txt').read_text())
+        original=json.loads((output/'input-manifest.json').read_text())
+        self.assertTrue(all(x['distribution_status']=='unknown' for x in original['instruments']))
+        stats=json.loads((output/'metrics.json').read_text())
+        self.assertEqual({r['evaluation_scope'] for r in stats},{'ex_post','cutoff_known'})
+        with zipfile.ZipFile(output/'audit.zip') as z:
+            manifest=json.loads(z.read('audit-manifest.json'))
+            for name,sha in manifest['files'].items(): self.assertEqual(digest(z.read(name)),sha)
+
+    def test_conditional_real_run_requires_frozen_addendum(self):
+        for a in self.config['instruments']:
+            a.update(distribution_status='unknown',known_distribution_events=[],known_split_events=[])
+        self.config.update(synthetic=False,conditional_unknown_evidence=['unknown']);self.save_config()
+        with self.assertRaisesRegex(ValueError,'frozen conditional addendum'):
+            run(self.root/'input.json',self.root/'protocol.json',self.sha,self.root/'out',
+                conditional_nav_scenarios=True,assumptions=[CONDITIONAL_ASSUMPTION])
 
 
 if __name__=='__main__': unittest.main()
