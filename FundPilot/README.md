@@ -19,6 +19,7 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 - AGENTS.md / workflow.md：完整目标流程与边界。
 - architecture.md：TradingAgents、Qlib、FinRobot、FinRL 一手资料调研。
 - fundpilot/ledger.py、portfolio.py：追加事件与持仓投影。
+- information-policy.md / information.py：按用途的信息需求、事件时间与版本、预期差可比性和缺证据弃权；本地检查，尚未接入生产编排。
 - market.py：经过核查的行情导入、时间与来源检查。
 - research.py：基线预测、交易日结算、点时过滤、经验审查。
 - backtest.py：显式历史交易事件重放内核，不自动推导真实规则。

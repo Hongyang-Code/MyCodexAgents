@@ -57,3 +57,11 @@ git diff --check
 本轮开发可继续，不将这些依赖伪装为已通过；涉及真实资产决策、main合并及正式部署均由用户决定。
 
 迭代候选扩展手动验证：FundPilot 172 项、ResearchHotspotFollow 23 项、TextReadable 12 项通过；compileall、release checker、diff --check 通过。新增 7 项合成测试覆盖 ISO 周/年界、缺少周一的开放日、窗口中周初始化、阻塞检查不补查、非检查日继续结算、无额外再平衡、未来数据隔离、72 情景开关一致、90 情景端到端和记录校验。另在本次开发环境与修改前保存的 9db3ad1 源码直接比较，合成输入下原72情景完整结果字典及预测tape相同。没有在此验证中使用真实市场数据，未证明周频改善效果，不能将手动测试写作CI通过。
+
+## 信息契约小增量验收
+
+新增 information.py 的19项合成测试通过，完整FundPilot共191项通过；ResearchHotspotFollow 23项、TextReadable 12项通过。compileall、release checker、diff --check及新增信息政策的TextReadable结构检查通过。手动语言与内容复查涵盖用途优先级、时间版本、暴露/传导、预期差、失效传播和改进闭环；不冒称独立外部框架复现。
+
+新增验收覆盖：未审阅/过期/冲突/观点不能填补必要证据；错误份额/渠道不匹配；未知首次可得不回填；修订过期不恢复旧事实；无发布前预期或不同比较口径时预期差unknown；拒绝费率传到净收益/排名/摘要、无关净值不受影响；有效0与缺失区分；确定性失败不重试，预算耗尽降级，写入或结果未知要求先核对。迟可得净值与重复记账另外沿用test_market.test_no_backdated_availability、test_ledger.test_duplicate_and_conflict及runner并发/未来证据测试。
+
+未覆盖：真实网页采集/时点档案/来源真实性、自动暴露穿透和完整持仓覆盖率验证、网络实际退避/故障注入、生产DailyRunner接入、端到端结论撤销、真实交易与部署。本次只增加本地函数及通用规范，未重调/重跑真实研究预测或90情景，未提交真实来源或运行材料。
