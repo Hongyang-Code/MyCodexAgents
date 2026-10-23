@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .market import timestamp, number
 from .iteration_control import RunBudget
+from .numeric_forecast import validate_numeric, score_numeric, summarize_numeric
 
 
 def digest(raw):
@@ -109,6 +110,7 @@ def validate(cards, sources, calendar):
         raise ValueError('batch shape exceeds research budget')
     seen = set()
     for c in rows:
+        validate_numeric(cards,c)
         key = (c['fund'], c['origin'], c['horizon'])
         if key in seen:
             raise ValueError('duplicate fund/origin/horizon')
@@ -217,6 +219,9 @@ def score(frozen, nav_path, manifest_path, as_of, output):
                 if row['llm_hit'] is False:
                     row['attribution']['support']=['frozen unconditional direction differs from observed NAV direction']
                     row['attribution']['possible_classes']=['source','timing','reasoning','unobserved_shock','normal_noise']
+        if cards.get('numeric_schema'):
+            row['numeric_scores']=score_numeric(c['numeric_forecast'],row['nav_price_change'],
+                card_id=c['id'],target=target,as_of=as_of,missing_reason=row['missing_reason'])
         row.update(diagnostic_labels(cards['mode']))
         tape.append(row)
     def metrics(rows):
@@ -241,6 +246,9 @@ def score(frozen, nav_path, manifest_path, as_of, output):
                 'Same-origin funds share market shocks; no independent-sample CI',
                 'Historical assumed availability is not verified point-in-time knowledge',
                 'No automatic promotion, trading or notification; conditional scenarios not counted as direction hits']}
+    if cards.get('numeric_schema'):
+        result['numeric_metrics']=summarize_numeric(tape)
+        result['numeric_metrics_by_fund_horizon']={r['card_id']:summarize_numeric([r]) for r in tape}
     result.update(diagnostic_labels(cards['mode']))
     if any(r['llm_hit'] is False for r in tape):
         result['improvement_proposals']=[{'status':'candidate_only_not_registered_or_evaluated',

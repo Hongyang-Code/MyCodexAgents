@@ -65,3 +65,32 @@ manifest.json记录冻结receipt、卡片/来源/日历、NAV及manifest、结�
 receipt、结果及每张tape、改进提案、输出manifest均标source_time_qualification=limited、non_blind=true、non_oos=true、current_vintage=true、historical_revision_status=unknown及snapshot_hash_basis=captured_content_utf8_not_raw_http。原来源快照原样保存，不加伪造标签改变原字节；模式和限制由生成的审计输出承载。诊断成功不表示strict gate通过。
 
 保留首次真实拒绝日志及原LLM卡；适配仅建立新的输入封装/证据schema版本，不更改原判断、理由、期限或方向。新封装另行freeze，不覆盖首次记录或原前瞻9卡。同卡复测只验schema修复，不能称新模型改进或重新调参。
+
+## 新批次的独立数值研究预测
+
+交易弃权、无校准优势、方向弃权，不自动等于缺研究预测。后续新冻结批次可提供可反驳的主观概率和分位数供成熟后校准；证据不足仍可明确缺预测。此项仅改善测量，不提高买入权限，不证明盈利，不重置结构候选/调优预算，也不自动采用候选。
+
+启用时在cards.json顶层增加numeric_schema=research_numeric_v1与new_batch_no_backfill=true。每卡增加以下numeric_forecast对象，horizon须等于原卡期限（1/5/20估值日），模型版本未知仍写unknown：
+
+```json
+{
+  "unit": "raw_nav_return_fraction",
+  "event": "return_gt_zero",
+  "horizon": 5,
+  "calibration_status": "subjective_uncalibrated",
+  "p_up": "0.55",
+  "q10": "-0.03",
+  "q50": "0.005",
+  "q90": "0.04"
+}
+```
+
+上例仅示意字段，不是行情预测。p_up是目标NAV相对D0严格上涨的主观概率，零收益标签为0；0.01代表1%原始NAV变化，不是价格或百分数1。q10/q50/q90为同一D0到目标的NAV变化分位数，必须有序且不小于-1；标称中央区间覆盖率80%不等于实际覆盖率已校准。不得把角色投票或任意置信分直接冒称校准概率。
+
+p_up可为null；分位数只能三项都有或全部null。任一组缺失须写missing_reason。direction=abstain仍可独立提供数值预测，保留原方向弃权理由；无交易不需要把概率或分位数清空。所有字段先冻结，禁止给旧方向卡事后补概率；new_batch_no_backfill是调用方声明，CLI不跨批次识别历史ID，调用方必须保留原卡及独立新批次记录。冻结后改数值同样触发哈希拒绝。
+
+原freeze/score命令不变。成熟且有实际NAV的标签才产生numeric_scores：Brier复用research.evaluate；分位数给各自pinball损失、闭区间覆盖及宽度。未成熟、缺实际值或缺预测对应损失为null，绝不当0损失或命中。数值评分不依赖方向是否弃权，更不生成交易动作。
+
+新增numeric_metrics及逐卡基金/期限指标，分开probability_n、quantile_n、成熟标签数、缺失数与覆盖率。Brier基线预先固定p_up=0.5；分位数基线另为q10=q50=q90=0的水平不变退化分布。两者是不同比较基线，均不拟合、不读未来特征、不按结果选择；每项基线仅与该项LLM可评分样本配对。旧方向基线不改。区间覆盖与宽度、pinball同时看；不能用扩大区间或少量命中宣称有效。
+
+主观预测是否校准须积累未来未见、合理非重叠样本并审查不确定性；本接口不做校准拟合、不提供小样本独立CI。输出calibration_proven、profitability_improved及trading_authorized均为false。已见历史仍非OOS；测量能力改进不等于策略或净收益改善。
