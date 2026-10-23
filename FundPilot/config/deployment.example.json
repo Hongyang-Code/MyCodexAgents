@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "mode": "research_only",
+  "production_enabled": false,
+  "timezone": "Asia/Shanghai",
+  "daily_local_time": "21:30",
+  "daily_rrule": "FREQ=DAILY;BYHOUR=21;BYMINUTE=30;BYSECOND=0",
+  "weekly_review": "pending_confirmation",
+  "monthly_review": "pending_confirmation",
+  "notification_policy": "actionable_only",
+  "platform_silence_verified": false,
+  "trade_execution_enabled": false,
+  "official_deployment_requires_owner_approval": true,
+  "risk_profile": null,
+  "initial_portfolio": null,
+  "private_store_head_id": null,
+  "private_store_recovery_verified": false
+}
