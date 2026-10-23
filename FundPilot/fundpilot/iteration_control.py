@@ -105,12 +105,14 @@ def register_candidate(protocol, history):
     return True
 
 
-def review_candidate(protocol, result, prior_evaluations=0):
+def review_candidate(protocol, result, prior_evaluations=None):
     """Returns a review state only, never switches stable version or investment use.
 
     Hash/boolean attestations require external evidence inspection. Statistical
     sufficiency is NOT inferred from a win count or caller's confidence.
     """
+    if prior_evaluations is None:
+        raise ValueError('complete evaluation history required')
     if type(prior_evaluations) is not int or prior_evaluations != 0:
         raise ValueError('single candidate evaluation budget exhausted')
     for k in ('evidence_hash', 'evaluation_hash'):

@@ -88,24 +88,32 @@ class IterationControlTests(unittest.TestCase):
 
     def test_fairness_and_counterexamples(self):
         for changes in ({'evidence_hash':'other'},{'evaluation_hash':'changed'}, {'counterexample_review':''}, {'results_ref':''}):
-            with self.assertRaises(ValueError): review_candidate(protocol(),result(**changes))
+            with self.assertRaises(ValueError): review_candidate(protocol(),result(**changes),0)
         with self.assertRaises(ValueError):review_candidate(protocol(),result(),1)
 
     def test_no_improvement_or_regression_retains_stable(self):
         for changes in ({'candidate_metric':'4'},{'candidate_metric':'5'},{'regression_checks_passed':False}):
-            self.assertEqual(review_candidate(protocol(),result(**changes)),'retain_stable')
+            self.assertEqual(review_candidate(protocol(),result(**changes),0),'retain_stable')
 
     def test_process_never_proves_prediction(self):
-        self.assertEqual(review_candidate(protocol(),result()),'process_review_eligible_not_prediction_evidence')
+        self.assertEqual(review_candidate(protocol(),result(),0),'process_review_eligible_not_prediction_evidence')
         for value in ('NaN','Infinity',True,1.5):
-            with self.assertRaises(ValueError):review_candidate(protocol(),result(candidate_metric=value))
+            with self.assertRaises(ValueError):review_candidate(protocol(),result(candidate_metric=value),0)
 
     def test_prediction_not_promoted_by_few_wins_or_reuse(self):
         p=protocol(kind='prediction')
-        self.assertEqual(review_candidate(p,result(data_role='reused_development',mature=True)),'pending_future_validation')
-        self.assertEqual(review_candidate(p,result(data_role='future_unseen',mature=True,wins=3)),'pending_future_validation')
+        self.assertEqual(review_candidate(p,result(data_role='reused_development',mature=True),0),'pending_future_validation')
+        self.assertEqual(review_candidate(p,result(data_role='future_unseen',mature=True,wins=3),0),'pending_future_validation')
         r=result(data_role='future_unseen',mature=True,nonoverlap_analysis='ref',uncertainty_analysis='ref',
                  cost_risk_comparison='ref',sample_sufficiency_review='ref')
-        self.assertEqual(review_candidate(p,r),'independent_review_required_no_automatic_promotion')
+        self.assertEqual(review_candidate(p,r,0),'independent_review_required_no_automatic_promotion')
         r['mature']=False
-        self.assertEqual(review_candidate(p,r),'pending_future_validation')
+        self.assertEqual(review_candidate(p,r,0),'pending_future_validation')
+
+    def test_missing_evaluation_history_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, 'history required'):
+            review_candidate(protocol(), result())
+        with self.assertRaisesRegex(ValueError, 'history required'):
+            review_candidate(protocol(), result(), None)
+        self.assertEqual(review_candidate(protocol(), result(), 0),
+                         'process_review_eligible_not_prediction_evidence')
