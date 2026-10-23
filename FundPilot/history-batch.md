@@ -134,3 +134,34 @@ PYTHONPATH=source/FundPilot python -m fundpilot.history_batch \
 ```
 
 时间、Git环境和ZIP元数据可能不同；复验比较规范化预测、交易及统计，不要求ZIP整体字节相同。合成测试覆盖整条CLI和72情景，但不代表完成真实半年研究或证明预测有效。
+
+## 显式迭代候选：周频检查
+
+默认仍为原四策略、72 情景。条件模式可额外传入
+`--improvement-protocol /private/improvement.json --improvement-protocol-sha256 SHA256`，
+保留输入冻结字节并记录哈希，新增 `trend20_weekly` 的 18 情景，共 90。
+改进协议 JSON 必需字段为 iteration=1、candidate=trend20_weekly、
+status=frozen_for_implementation、evaluation_role=reused_development、
+independent_oos=false、prior_prediction_and_strategy_outcomes_seen=true、
+budget={new_candidate_count:1,new_scenario_count:18,parameter_search:false}；
+另需非空 frozen_at、registration_boundary、one_change、calendar_definition、
+blocked_checkpoint、sign_semantics、acceptance、future_promotion。文字是审计记录，
+不会动态执行或修改参数；候选算法仅允许下述固定实现。真实冻结协议由调用者私有保存，不能提交仓库。
+
+唯一变化为每 ISO 年/周首个共同申赎开放日检查信号，窗口首个共同开放日初始化。
+不使用 weekday 推断开放日。检查时仍有未完成订单则跳过到下周，期间只结算旧单。
+信号未变不发单，不额外再平衡，不补买。其余参数、未知价成交规则和资金账本不变。
+
+输出 iteration-pairs.json/csv 保存全部 18 对，以同情景日频 trend20 为唯一消融基准；
+iteration-counts.json 统计增/平/减。成交笔数只计 priced，成交额为绝对 units*nav（不含费用），
+平均风险暴露为所有估值行 values 总和/equity，现金比例包括可用现金、冻结现金和应收。
+终值差统一为周频减日频，负值为条件机会损失，不使用后见最优价格。
+保留零成本结果、待结算状态与原时间分段诊断。其他三基准仅作背景比较。
+
+所有迭代生成结果标注 evaluation_context=reused_development；原 validation/test 只保留
+日期身份，不能称独立样本外。原始证据和冻结协议按字节保留，不注入标签。
+条件 NAV 边界仍适用，不代表实际基金总回报、可执行交易或分红门槛通过。
+improvement-experience.json 记录事实引用、原因与假设、支持/反例、配置、冻结哈希、
+数据角色、验收项/结果、不确定性及下一验证。review_record 拒绝缺项、缺同样本比较、
+未标复用或任何晋级请求。空反例只表示当前有限检索未找到，不构成可靠性证据。
+前向或真正未见数据验证尚需单独冻结；本扩展不改变生产接口、风险规则或部署状态。

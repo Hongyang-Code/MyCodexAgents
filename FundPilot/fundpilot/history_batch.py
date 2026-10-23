@@ -20,6 +20,8 @@ import statistics
 import subprocess
 import zipfile
 
+from .improvement import CANDIDATE, CONTEXT, checkpoints, load_protocol, mechanism, paired_results, review_record
+
 MODELS = ('abstain', 'persistence', 'trend20')
 STRATEGIES = ('buy_hold', 'installments', 'monthly_rebalance', 'trend20')
 CONDITIONAL_SCOPE = 'conditional_raw_nav_no_distribution_no_split'
@@ -321,9 +323,9 @@ def metrics(tape):
 
 
 def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
-             conditional_nav_scenarios=False,assumptions=(),unknown_evidence=None):
+             conditional_nav_scenarios=False,assumptions=(),unknown_evidence=None,improvement_enabled=False):
     """Closed synthetic pool with future-price orders and delayed resource release."""
-    if strategy not in STRATEGIES:
+    if strategy not in STRATEGIES + ((CANDIDATE,) if improvement_enabled else ()):
         raise ValueError('unknown strategy')
     metadata=conditional_metadata(assets,p,assumptions,unknown_evidence) if conditional_nav_scenarios else None
     if not conditional_nav_scenarios and any(a.get('distribution_status')!='verified_none' for a in assets.values()):
@@ -350,6 +352,8 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
         d=next((x for x in days if x>=date.fromisoformat(due)),None)
         if d is not None: installment_days[d]=installment_days.get(d,0)+1
     previous_month=None;previous_signals=None
+    weekly=checkpoints(days) if strategy==CANDIDATE else set()
+    trend=strategy in ('trend20',CANDIDATE)
     def emit(d,event,**kw):
         trades.append(dict(date=d.isoformat(),event=event,**kw))
     def state(d):
@@ -385,9 +389,9 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
         month=(d.year,d.month)
         signals={};marks={}
         for c,a in assets.items():
-            if d not in common:
+            if d not in common or (strategy==CANDIDATE and d not in weekly):
                 continue
-            est,reason=estimates(a,d,information_lag,'trend20' if strategy=='trend20' else 'persistence',1)
+            est,reason=estimates(a,d,information_lag,'trend20' if trend else 'persistence',1)
             if est:
                 # Allocation marks also use only visible anchor, never decision-day NAV.
                 marks[c]=D(str(est['anchor_nav']))
@@ -396,6 +400,12 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
         due=(strategy=='buy_hold' and d==days[0]) or (strategy=='installments' and d in installment_days)
         due=due or (strategy=='monthly_rebalance' and month!=previous_month)
         due=due or (strategy=='trend20' and signals!=previous_signals)
+        if strategy==CANDIDATE and d in weekly:
+            emit(d,'signal_checkpoint')
+            if orders or pending:
+                emit(d,'decision_skipped',reason='pending_orders_or_settlement')
+            else:
+                due=signals!=previous_signals
         due=due and d in common
         if due:
             if len(marks)!=len(assets) or any(v is None for v in signals.values()):
@@ -410,7 +420,7 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
                         buy_budgets[c]=D(str(p['initial_cash']))/6/n*installment_days[d]
                         continue
                     target=known_equity/n
-                    if strategy=='trend20' and not signals[c]: target=D(0)
+                    if trend and not signals[c]: target=D(0)
                     delta=target-holdings[c]*marks[c]
                     if delta>0: buy_budgets[c]=delta
                     elif delta<0: sell_units[c]=min(holdings[c],-delta/marks[c])
@@ -470,6 +480,8 @@ def simulate(assets,p,strategy,information_lag,settlement_lag,cost_bps,
             'split_returns':split_returns,
             'liquidatable_return':None,'execution_claim':'hypothetical_future_NAV_and_settlement_scenario',
             'transactions':trades,'daily_assets':daily}
+    if strategy==CANDIDATE:
+        metadata=dict(metadata or {},evaluation_context=CONTEXT,independent_oos=False)
     if metadata:
         result.update(metadata)
         result['transactions']=scoped_output(trades,metadata)
@@ -498,7 +510,7 @@ def write_csv(path,rows):
 
 
 def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supplement_path=None,supplement_sha=None,
-        conditional_nav_scenarios=False,assumptions=(),conditional_addendum=None,conditional_addendum_sha=None):
+        conditional_nav_scenarios=False,assumptions=(),conditional_addendum=None,conditional_addendum_sha=None,improvement_protocol=None,improvement_protocol_sha=None):
     protocol_bytes=Path(protocol_path).read_bytes()
     if digest(protocol_bytes)!=protocol_sha: raise ValueError('frozen protocol hash mismatch')
     p=json.loads(protocol_bytes);protocol_check(p)
@@ -508,6 +520,17 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
     if assumptions and not conditional_nav_scenarios:
         raise ValueError('assumptions require explicit conditional mode')
     metadata=conditional_metadata(assets,p,assumptions,config.get('conditional_unknown_evidence')) if conditional_nav_scenarios else None
+    improvement_bytes=None
+    strategies=STRATEGIES
+    if improvement_protocol:
+        if not conditional_nav_scenarios or predictions_only:
+            raise ValueError('improvement requires conditional strategy mode')
+        improvement_bytes=load_protocol(improvement_protocol,improvement_protocol_sha)
+        metadata.update(evaluation_context=CONTEXT,independent_oos=False,
+            improvement_protocol_sha256=improvement_protocol_sha,iteration=1)
+        strategies=STRATEGIES+(CANDIDATE,)
+    elif improvement_protocol_sha:
+        raise ValueError('improvement hash requires protocol')
     addendum_bytes=None
     if conditional_addendum:
         if not conditional_nav_scenarios: raise ValueError('conditional addendum requires conditional mode')
@@ -540,6 +563,9 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
     if addendum_bytes:
         (output/'protocol-conditional-addendum.json').write_bytes(addendum_bytes)
         (output/'protocol-conditional-addendum.json').chmod(0o600)
+    if improvement_bytes:
+        (output/'protocol-improvement.json').write_bytes(improvement_bytes)
+        (output/'protocol-improvement.json').chmod(0o600)
     save_json(output/'input-manifest.json',config)
     replay=json.loads(json.dumps(config))
     for item in replay['files'].values(): item['path']='evidence/'+item['sha256']
@@ -583,13 +609,14 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
         stats=metrics(tape);save_json(output/'metrics.json',stats);save_csv(output/'metrics.csv',stats)
         summaries=[]
         if not predictions_only:
-            for strategy in STRATEGIES:
+            for strategy in strategies:
                 for lag in p['information_lags']:
                     for settlement in p['settlement_lags']:
                         for cost in p['cost_bps']:
                             with localcontext() as ctx:
                                 ctx.prec=40
-                                result=simulate(assets,p,strategy,lag,settlement,cost,conditional_nav_scenarios,assumptions,config.get('conditional_unknown_evidence'))
+                                result=simulate(assets,p,strategy,lag,settlement,cost,conditional_nav_scenarios,assumptions,config.get('conditional_unknown_evidence'),bool(improvement_bytes))
+                                if improvement_bytes: result.update(mechanism(result))
                             name=f'{strategy}-lag{lag}-settle{settlement}-cost{cost}'
                             save_json(output/(name+'-transactions.json'),result.pop('transactions'))
                             save_json(output/(name+'-daily-assets.json'),result.pop('daily_assets'))
@@ -598,6 +625,24 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
         for s in summaries:
             base=baselines[(s['information_lag'],s['settlement_lag'],s['cost_bps'])]
             s['excess_return_vs_buy_hold']=s['return']-base['return']
+        if improvement_bytes:
+            pairs,counts=paired_results(summaries)
+            save_json(output/'iteration-pairs.json',pairs);save_csv(output/'iteration-pairs.csv',pairs)
+            save_json(output/'iteration-counts.json',counts)
+            record=dict(issue_id='cadence-friction-candidate',fact_evidence_refs=['iteration-pairs.json','iteration-counts.json'],
+                confirmed_causes=[],hypotheses=['Weekly checks may reduce friction with opportunity and drawdown costs'],
+                support=[r for r in pairs if Decimal(r['weekly_minus_daily']['fees_paid'])<0],
+                counterexamples=[r for r in pairs if Decimal(r['weekly_minus_daily']['fees_paid'])>=0 or Decimal(r['weekly_minus_daily']['terminal_equity'])<0],
+                counterexample_review='All 18 scenarios including zero cost retained; empty list is no evidence of reliability',
+                candidate_version='trend20_weekly-v1',before_config={'cadence':'daily','signal':'trend20'},
+                after_config={'cadence':'first_common_ISO_week_session','signal':'trend20'},
+                protocol_sha256=improvement_protocol_sha,data_role=CONTEXT,evaluation_context=CONTEXT,
+                acceptance_items=['72 baseline numerical reproduction','weekly timing synthetic regression','all 18 paired outcomes'],
+                results={'pair_count':len(pairs),'mechanism_counts':counts,'efficacy':'not proven'},
+                uncertainty=['one reused window','shared market dependence','conditional distribution assumption'],
+                next_validation='Separately freeze forward or genuinely unseen data before evaluation',
+                same_sample_baseline='trend20 with identical data, lag, settlement, fee and budget',status='candidate_only')
+            review_record(record);save_json(output/'improvement-experience.json',record)
         save_json(output/'strategies.json',summaries);save_csv(output/'strategies.csv',summaries)
         experiences=[]
         for code in assets:
@@ -637,7 +682,7 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
             'assumed_available_at':'feature-view hypothetical decision timestamp; not verified source publication time',
             'no_distribution':'reviewer attestation with hashed evidence, not automatically verified',
             'strategy_equity':'book wealth, includes pending/frozen assets; not liquidatable cash',
-            'strategy_scenarios':'all 72 predeclared scenarios, no selection of winner',
+            'strategy_scenarios':f'all {len(summaries)} predeclared scenarios, no selection of winner',
             'source_bytes':'evidence/{sha256}; source URL/time/license retained in input-manifest.json'})
         best=[]
         for c in assets:
@@ -647,10 +692,13 @@ def run(input_path,protocol_path,protocol_sha,output,predictions_only=False,supp
         if metadata:
             report+='条件研究边界：'+json.dumps(metadata,ensure_ascii=False)+'\n\n'
             report+='分红/拆分证据完整性未知，默认严格门槛未通过。本模式仅假设无现金分红及无拆分，分红可能同时改变信号和现金，不能据此判断真实策略优劣。\n\n'
+        if improvement_bytes:
+            report+='iteration1：全部数据复用开发，原 validation/test 仅时间分段，非独立 holdout/OOS。18 对比较详见 iteration-pairs，终值差为周频减同情景日频；未发生前向验证，不晋级经验。\n\n'
+            report+='机制变化计数：'+json.dumps(counts,ensure_ascii=False)+'\n\n'
         report+=f"观察窗口：{p['analysis_start']}—{p['analysis_end']}。原资料截止：{p['original_information_cutoff']}；修订取证截止：{p['vintage_evidence_cutoff']}。\n\n"
         report+='\n'.join(best)+'\n\n'
         report+=f'完整预测记录 {len(tape)} 条；固定策略情景 {len(summaries)} 个。全部结果均已保存，不按收益择优报告。\n\n'
-        for strategy in STRATEGIES:
+        for strategy in strategies:
             rows=[s for s in summaries if s['strategy']==strategy]
             if rows:
                 label='条件NAV价格路径账面变化' if metadata else '账面收益'
@@ -687,8 +735,9 @@ def main():
     parser.add_argument('--conditional-nav-scenarios',action='store_true')
     parser.add_argument('--assumption',action='append',default=[],choices=[CONDITIONAL_ASSUMPTION])
     parser.add_argument('--conditional-addendum');parser.add_argument('--conditional-addendum-sha256')
+    parser.add_argument('--improvement-protocol');parser.add_argument('--improvement-protocol-sha256')
     args=parser.parse_args()
-    print(json.dumps(run(args.input,args.protocol,args.protocol_sha256,args.output,args.predictions_only,args.supplement,args.supplement_sha256,args.conditional_nav_scenarios,args.assumption,args.conditional_addendum,args.conditional_addendum_sha256),ensure_ascii=False))
+    print(json.dumps(run(args.input,args.protocol,args.protocol_sha256,args.output,args.predictions_only,args.supplement,args.supplement_sha256,args.conditional_nav_scenarios,args.assumption,args.conditional_addendum,args.conditional_addendum_sha256,args.improvement_protocol,args.improvement_protocol_sha256),ensure_ascii=False))
 
 
 if __name__=='__main__': main()
