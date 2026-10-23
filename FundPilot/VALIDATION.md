@@ -115,3 +115,11 @@ git diff --check
 新增7项合成回归：无方向/日期/发布时间的保存与CLI、原字节/只读权限、对象和原文件哈希拒绝、未来生成时间/伪绑日期拒绝、数值范围检查、拒绝覆盖和旧score直通、保存后篡改检测、截点后来源仍只存pending。原卡到旁路字段映射需外部独立核对，本地权限/哈希不是远程WORM。没有读取或修改真实9卡，没有评分或策略搜索。
 
 本次完整FundPilot254项、ResearchHotspotFollow23项、TextReadable12项及compileall、发布、结构和diff检查通过。本地测试不代表真实9卡已成功保存、资格已核实或已评分，真实接入须私有执行。
+
+## Pending记录的追加绑定与评分
+
+新增独立pending_evaluation，在核对原JSON/旁路记录/receipt及绑定哈希后，接受外部审阅的原始冻结证据、冻结对象资格、基金估值收盘序列和实际NAV标签。D0由原始冻结之后首个收盘定位，Dh按基金序列；不按绑定时刻平移，不补方向或发布时点，不修改原始数值。缺原冻结/来源/日历或未成熟为pending，缺NAV/标签资格为missing，损失null；成熟合格标签复用原Brier/pinball。
+
+9项新增合成回归覆盖真实CLI子进程、原始冻结锚点、旧文件原字节不变、缺资格/日历/NAV、未成熟/范围不足、哈希/对象替换拒绝、提前标签/迟审阅、后补字段不完整及冻结后取得对象阻断。仅合成数据获得成熟评分；真实未来NAV尚未出现，未宣称真实评分成功。资格/完整性均为外部审阅声明，无联网核实；known-before-freeze不等于information_cutoff资格证明，旧strict入口和交易门禁不变。
+
+本次完整FundPilot263项、ResearchHotspotFollow23项、TextReadable12项、compileall、发布/结构/diff检查通过；本地工程验收不等于CI或真实研究兑现。

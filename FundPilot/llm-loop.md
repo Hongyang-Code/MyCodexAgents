@@ -97,7 +97,7 @@ p_up可为null；分位数只能三项都有或全部null。任一组缺失须�
 
 ## 先保存、后核验的数值卡路径
 
-真实新批次可能只有数值预测，D0/Dh未核实，来源仅有捕获对象与真实取得时间。此时不造方向、日期、HTTP原件或精确发布时间，也不借历史模式绕过严格评分。独立pending_numeric只保存待核验材料，本轮未实现第二阶段绑定/评分。
+真实新批次可能只有数值预测，D0/Dh未核实，来源仅有捕获对象与真实取得时间。此时不造方向、日期、HTTP原件或精确发布时间，也不借历史模式绕过严格评分。独立pending_numeric只保存待核验材料；后续绑定/评分由下面独立pending_evaluation入口追加，不修改保存记录。
 
 ```bash
 PYTHONPATH=FundPilot python -m fundpilot.pending_numeric save \
@@ -122,4 +122,33 @@ object_sha256仅针对上述captured_object的明确JSON表示计算：`json.dum
 
 输出original.json、capture-record.json及receipt.json，目录0700、文件0400；输出目录已存在就拒绝，不覆盖原件。inspect复核文件哈希、数值结构和pending状态。只读文件权限和本地哈希不构成不可篡改云存储，调用方须独立私有保留原始冻结记录及receipt；原资料和本次首次失败记录不删除。
 
-receipt与inspect始终给calendar_qualification=pending、source_qualification=pending、scoring_ready=false、scoring_implemented=false、independent_oos=false、trading_authorized=false。没有标签，不输出命中或损失。此保存目录不是旧严格freeze目录，不能直接送入旧score；未来只有独立核实来源资格、基金估值日历、D0/Dh及真实NAV并实现受审阅的绑定步骤后才可评分。现有严格入口原样保留，本轮不自动转接、不启用交易、不重置候选预算。
+receipt与inspect始终给calendar_qualification=pending、source_qualification=pending、scoring_ready=false、scoring_implemented=false、independent_oos=false、trading_authorized=false。没有标签，不输出命中或损失。此保存目录不是旧严格freeze目录，不能直接送入旧score；只有独立核实来源资格、基金估值日历、D0/Dh及真实NAV，再使用下面的追加评价步骤才可评分。现有严格入口原样保留，不自动转接、不启用交易、不重置候选预算。
+
+## 后续追加绑定与成熟评分
+
+```bash
+PYTHONPATH=FundPilot python -m fundpilot.pending_evaluation \
+  --pending /private/pending-new-batch \
+  --binding /private/evaluation-binding.json --binding-sha256 <该文件原字节SHA256> \
+  --as-of <实际评价时间，带时区> --output /private/evaluation-new-version
+```
+
+此入口先调用pending的完整哈希/数值检查，再校验绑定引用的三份保存文件SHA。所有后补资料只写入新的输出目录：binding.json原字节、results.json和manifest.json。原JSON、旁路记录及原receipt不更新，receipt中的“保存阶段不可评分”状态也不篡改。后补新事实只用于资格审查与标签，不反馈进原预测。后续每次补齐资料使用新的绑定文件及新目录，不覆盖历史缺失/失败结果。
+
+binding对象：
+
+- pending_sha256：键为original.json、capture-record.json、receipt.json，值为其原字节SHA256。
+- original_freeze：原始真实冻结证据及审阅，含frozen_at、original_sha256及下面通用审阅字段。该时间不得早于原generated_at或晚于首次pending保存时间；**不是本次绑定时间，也不能无证据把生成时间充作冻结时间**。由独立记录证明最初冻结，代码不联网核实。缺此证据保留pending。
+- source_reviews：逐source_id含原object_sha256、usable_for_frozen_prediction=true、review_scope=frozen_object_only_no_new_facts及通用审阅字段。每张卡所有引用对象都须通过；对象哈希必须与原记录一致，实际known_available_at须不晚于原始冻结时刻。原published_at=null可以继续保持null，不补造精确发布日期。
+- calendars：以完整基金/份额标识为键，每项含通用审阅字段、complete_valuation_sequence=true、coverage_start_at/coverage_end_at（带时区）、sessions数组，每项date及带时区close_at。coverage须覆盖原冻结时刻与提供的序列；排序/唯一性检查不能代替外部完整性核验，不从NAV行号或weekday猜估值日。
+- nav：可为空列表。每条含fund、date、nav（正数或null）、snapshot_kind、snapshot_sha256、真实known_available_at及通用审阅字段。标签必须在对应收盘以后实际已知且已审阅，所有实际时间不晚于as-of；来源哈希表示其声明的捕获类型，不能把对象哈希当HTTP。
+
+所有**通用审阅字段**：reviewed=true、evidence_ref、evidence_sha256（64位小写SHA256）、evidence_kind（raw_http/tool_extracted_text/structured_summary/captured_object）、真实retrieved_at、reviewed_at。它们都是外部审阅声明，程序只查结构、哈希对应关系和时间，不宣称联网证明了来源/日历。缺审阅、未知/拒绝资格或尚未到审阅时间可保留pending，而非填true通过。
+
+D0固定为sessions中close_at严格晚于**原始真实冻结时刻**的第一个已核估值收盘；可能是同一自然日，不能机械平移到下一个日期。Dh为该基金序列D0后第h个估值日；按每基金独立序列，不用之后绑定时间移动目标。日历范围不足时D0或Dh留null/pending，不能用未来收益择日。真实数据覆盖未齐时可反复追加资料，但冻结原点及预测不变。
+
+来源资格的本入口口径为“冻结前已实际取得的同一捕获对象，经外部复核可用于该冻结预测”，**不等于已经证明其在原information_cutoff前可得**，也不证明历史发布版本。结果单列该区别，原严格score门禁不变。来源在冻结后才实际取得，即使后来reviewed=true仍阻断该卡评分；后补新闻不得伪装原特征。
+
+逐卡输出D0/Dh、原冻结时刻、source/calendar资格、pending/missing/scored或mature_missing_prediction及reason，缺资格/缺日历/目标未成熟/缺NAV损失均null。已具资格且成熟时复用numeric_forecast的Brier/pinball/覆盖，不新增方向或交易动作；概率/分位数各自分母，不把缺预测当0损失。保留原数据偏差/模型记忆与非OOS边界，不自动证明校准、主动盈利或晋级。
+
+当前实现通过合成pending与成熟标签测试；真实未来结果尚未出现，不能宣称真实评分已成功。外部最初冻结证据、来源可用性与日历完整性仍需实际核实；局部缺资料只阻断相关卡，哈希被改或重复冲突等确定性错误拒绝整个绑定。不新增研究批次/交易策略，不重置任何调优预算。
