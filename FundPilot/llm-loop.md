@@ -47,3 +47,21 @@ manifest.json记录冻结receipt、卡片/来源/日历、NAV及manifest、结�
 ## 合成验证
 
 `PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_llm_loop.py -v`运行真实freeze/score子进程和合成数据，覆盖缺失、未成熟、重复、未来证据、弃权、零变化、冻结篡改、基线时点限制及私有权限。fixture不是LLM，真实卡和实际市场评分另行私有执行。
+
+## 显式有限日期诊断适配
+
+实际接入发现部分公开证据只有日期精度，且保留的是工具抽取或结构化摘要。此时不得伪填精确发布时间或把摘要哈希称HTTP原件。原retrospective/prospective/synthetic门槛不变；另选`mode=retrospective_diagnostic`（producer仍actual_llm），仅用于有限历史诊断。
+
+该模式每条来源仍需id、url、reviewed=true、真实retrieved_at/known_available_at；替代原published_at/raw_sha256/assumed_available_at的字段为：
+
+- published_precision：day；published_date：原资料标示YYYY-MM-DD；timezone：unknown。
+- snapshot_kind：structured_summary或tool_extracted_text。
+- snapshot_content：实际捕获文本字符串，不改写补料；若已有JSON摘要，可保存其原序列化文本字符串。
+- snapshot_sha256：snapshot_content解码后字符串的UTF-8原字节SHA-256，仅代表所捕获摘要/抽取文本。不得同时填写raw_sha256冒充HTTP。
+- revision_status：unknown，明确不能证明捕获内容与历史原版一致；本最小适配不支持自行声明已核实无修订。
+
+未知时区按UTC-12的最晚日界，即该日期次日12:00 UTC，要求严格早于截点且不晚于真实known时间；同日、临界时点或未知发布日期拒绝。日期通过仅是有限资格，不能证明原版历史可得。此分支不伪造published_at或available_at，不将计算日界写作已知发布时间。NAV CSV仍保留真实retrieved/known与独立assumed_available_at，历史基线规则不变。
+
+receipt、结果及每张tape、改进提案、输出manifest均标source_time_qualification=limited、non_blind=true、non_oos=true、current_vintage=true、historical_revision_status=unknown及snapshot_hash_basis=captured_content_utf8_not_raw_http。原来源快照原样保存，不加伪造标签改变原字节；模式和限制由生成的审计输出承载。诊断成功不表示strict gate通过。
+
+保留首次真实拒绝日志及原LLM卡；适配仅建立新的输入封装/证据schema版本，不更改原判断、理由、期限或方向。新封装另行freeze，不覆盖首次记录或原前瞻9卡。同卡复测只验schema修复，不能称新模型改进或重新调参。

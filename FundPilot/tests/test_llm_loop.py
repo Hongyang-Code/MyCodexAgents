@@ -93,3 +93,42 @@ class LoopTests(unittest.TestCase):
         self.frozen();p=self.root/'nav.csv';p.write_text(p.read_text().replace('2026-01-27,126,','2026-01-27,125,'));manifest(self.root)
         r=self.scored();self.assertEqual(r['tape'][0]['actual_direction'],'flat')
         self.assertTrue(r['tape'][0]['persistence_hit'])
+
+    def diagnostic(self):
+        self.alter('cards.json',lambda d:d.update(mode='retrospective_diagnostic',producer='actual_llm'))
+        content='Synthetic captured summary, not raw HTTP'
+        source={'id':'s1','url':'https://example.org/synthetic','reviewed':True,
+                'published_precision':'day','published_date':'2026-01-20','timezone':'unknown',
+                'retrieved_at':'2026-10-01T00:00:00Z','known_available_at':'2026-10-01T00:00:00Z',
+                'snapshot_kind':'structured_summary','snapshot_content':content,
+                'snapshot_sha256':hashlib.sha256(content.encode()).hexdigest(),'revision_status':'unknown'}
+        (self.root/'sources.json').write_text(json.dumps([source]))
+
+    def test_diagnostic_day_summary_and_output_labels(self):
+        self.diagnostic();receipt=self.frozen();r=self.scored()
+        for row in [receipt,r,*r['tape'],*r['improvement_proposals'],json.loads((self.root/'output/manifest.json').read_text())]:
+            self.assertEqual(row['source_time_qualification'],'limited')
+            self.assertTrue(row['non_blind']);self.assertTrue(row['non_oos']);self.assertTrue(row['current_vintage'])
+        self.assertEqual(r['metrics']['scored'],2)
+        self.assertEqual(json.loads((self.root/'frozen/sources.json').read_text())[0]['revision_status'],'unknown')
+
+    def test_strict_rejects_day_summary(self):
+        self.diagnostic();self.alter('cards.json',lambda d:d.update(mode='retrospective'))
+        with self.assertRaises(ValueError):self.frozen()
+
+    def test_same_day_and_timezone_boundary_rejected(self):
+        self.diagnostic()
+        for day in ('2026-01-25','2026-01-26'):
+            self.alter('sources.json',lambda d:d[0].update(published_date=day))
+            with self.assertRaises(ValueError):self.frozen()
+        self.alter('sources.json',lambda d:d[0].update(published_date='2026-01-24'))
+        self.alter('cards.json',lambda d:d.update(cutoff='2026-01-25T19:00:00+08:00'))
+        with self.assertRaises(ValueError):self.frozen()
+
+    def test_summary_hash_and_unknown_publication_rejected(self):
+        self.diagnostic();self.alter('sources.json',lambda d:d[0].update(snapshot_content='changed'))
+        with self.assertRaises(ValueError):self.frozen()
+        self.diagnostic();self.alter('sources.json',lambda d:d[0].update(published_precision='unknown'))
+        with self.assertRaises(ValueError):self.frozen()
+        self.diagnostic();self.alter('sources.json',lambda d:d[0].update(revision_status='verified_unrevised'))
+        with self.assertRaises(ValueError):self.frozen()

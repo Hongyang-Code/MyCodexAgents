@@ -83,3 +83,7 @@ git diff --check
 新增llm_loop两阶段CLI，freeze不读真值并保存原字节哈希，score再读取已审阅NAV文件。11项合成测试通过，包含真实子进程完整CLI运行；完整FundPilot220项、ResearchHotspotFollow23项、TextReadable12项通过，compileall、发布与diff检查通过。测试覆盖弃权分母、零值flat、缺失/未成熟、重复、未来证据、冻结篡改、连续趋势基线资格与私有输出权限。
 
 程序不生成LLM预测；真实卡生产者、源文、日历及NAV审阅声明仍需独立核验。本轮未运行真实行情、真实LLM卡或付费API，未改前瞻9卡/旧90情景。历史诊断非OOS，条件情景无触发观测时不评分；错误归因与一项改进提案仅待审候选。跨运行预算、不可变远程冻结与LLM运行接入未实现，不把本地哈希或合成测试当成独立盲评证明。
+
+实际接入schema修复：新增显式retrospective_diagnostic，保留day/unknown时区与捕获摘要哈希，不伪造HTTP原件或历史版本。新增4项合成回归覆盖日期摘要放行及全输出限制标签、严格模式拒绝、同日/最晚时区边界拒绝、摘要篡改及未知发布/伪称已核实修订拒绝。原卡方向与评分算法不变；真实同卡复测由私有执行任务完成，本代码任务未读取真实卡或净值。
+
+本次完整FundPilot224项、ResearchHotspotFollow23项、TextReadable12项、compileall、发布、结构及diff检查通过；这些是本地工程验证，不是CI或真实LLM效果验证。

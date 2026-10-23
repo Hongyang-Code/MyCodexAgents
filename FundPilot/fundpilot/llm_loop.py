@@ -1,7 +1,7 @@
 """Offline frozen LLM-card scoring; does not generate LLM text or execute agents."""
 import argparse
 import csv
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timezone, timedelta
 import hashlib
 import io
 import json
@@ -31,9 +31,38 @@ def private_dir(path):
     return path
 
 
+def diagnostic_source_bound(source, cutoff, known):
+    """Conservative date qualification, NOT historical availability or vintage proof."""
+    if source.get('snapshot_kind') not in ('structured_summary', 'tool_extracted_text'):
+        raise ValueError('diagnostic captured snapshot kind required')
+    content = source.get('snapshot_content')
+    if not isinstance(content, str) or not content.strip() or digest(content.encode('utf-8')) != source.get('snapshot_sha256'):
+        raise ValueError('captured UTF-8 snapshot hash mismatch')
+    if source.get('raw_sha256') is not None:
+        raise ValueError('summary snapshot must not be called raw HTTP')
+    if source.get('revision_status') != 'unknown':
+        raise ValueError('diagnostic adapter preserves unverified revision status as unknown')
+    if source.get('published_precision') == 'day' and source.get('timezone') == 'unknown':
+        day = date.fromisoformat(source['published_date'])
+        # Latest possible end of the given local day, using UTC-12.
+        bound = datetime.combine(day + timedelta(days=1), datetime.min.time(), timezone.utc) + timedelta(hours=12)
+        if bound >= cutoff or bound > known:
+            raise ValueError('whole publication day not safely before cutoff/known time')
+        return bound
+    raise ValueError('diagnostic day precision/unknown timezone required; unknown publication is ineligible')
+
+
+def diagnostic_labels(mode):
+    if mode != 'retrospective_diagnostic':
+        return {}
+    return dict(source_time_qualification='limited', non_blind=True, non_oos=True,
+                current_vintage=True, historical_revision_status='unknown',
+                snapshot_hash_basis='captured_content_utf8_not_raw_http')
+
+
 def validate(cards, sources, calendar):
     mode = cards['mode']
-    if mode not in ('retrospective', 'prospective', 'synthetic'):
+    if mode not in ('retrospective', 'retrospective_diagnostic', 'prospective', 'synthetic'):
         raise ValueError('explicit research mode required')
     if cards['producer'] != ('synthetic_fixture' if mode == 'synthetic' else 'actual_llm'):
         raise ValueError('real LLM attestation required; synthetic cannot impersonate LLM')
@@ -51,11 +80,14 @@ def validate(cards, sources, calendar):
     for s in sources:
         if s.get('reviewed') is not True or not s.get('url','').startswith('https://'):
             raise ValueError('reviewed public source required')
-        if not re.fullmatch('[0-9a-f]{64}',s.get('raw_sha256','')):
+        if mode != 'retrospective_diagnostic' and not re.fullmatch('[0-9a-f]{64}',s.get('raw_sha256','')):
             raise ValueError('source hash required')
         known = timestamp(s['known_available_at'])
         if known < timestamp(s['retrieved_at']):
             raise ValueError('knowledge cannot predate retrieval')
+        if mode == 'retrospective_diagnostic':
+            source_map[s['id']] = diagnostic_source_bound(s, cutoff, known)
+            continue
         published = timestamp(s['published_at'])
         if published > known:
             raise ValueError('publication after known availability')
@@ -113,7 +145,7 @@ def freeze(cards_path, sources_path, calendar_path, output):
     for name,body in raw.items():
         (root/name).write_bytes(body); (root/name).chmod(0o600)
     receipt = {'frozen_at':now(),'hashes':{k:digest(v) for k,v in raw.items()},
-               'truth_loaded_by_freeze':False,'producer_attestation_not_independently_verified':True}
+               'truth_loaded_by_freeze':False,'producer_attestation_not_independently_verified':True, **diagnostic_labels(cards['mode'])}
     write_json(root/'receipt.json',receipt)
     return receipt
 
@@ -144,7 +176,7 @@ def score(frozen, nav_path, manifest_path, as_of, output):
         if key in nav: raise ValueError('duplicate NAV')
         known = timestamp(r['known_available_at']); retrieved = timestamp(r['retrieved_at'])
         if known < retrieved: raise ValueError('NAV knowledge precedes retrieval')
-        available = timestamp(r['assumed_available_at']) if cards['mode']=='retrospective' else known
+        available = timestamp(r['assumed_available_at']) if cards['mode'] in ('retrospective','retrospective_diagnostic') else known
         if available.date() < date.fromisoformat(r['date']):
             raise ValueError('NAV feature availability precedes valuation date')
         nav[key] = dict(value=number(r['nav']) if r['nav'].strip() else None,known=known,available=available)
@@ -185,6 +217,7 @@ def score(frozen, nav_path, manifest_path, as_of, output):
                 if row['llm_hit'] is False:
                     row['attribution']['support']=['frozen unconditional direction differs from observed NAV direction']
                     row['attribution']['possible_classes']=['source','timing','reasoning','unobserved_shock','normal_noise']
+        row.update(diagnostic_labels(cards['mode']))
         tape.append(row)
     def metrics(rows):
         mature=[r for r in rows if r['actual_direction'] is not None]
@@ -200,14 +233,15 @@ def score(frozen, nav_path, manifest_path, as_of, output):
                     paired_hits={k:sum(r[k] for r in paired) for k in ('llm_hit','persistence_hit','trend20_hit')},
                     actual_counts={d:sum(r['actual_direction']==d for r in mature) for d in ('up','flat','down')})
     result={'scope':'raw_nav_direction_research_not_total_return','mode':cards['mode'],
-            'retrospective':cards['mode']=='retrospective','llm_memory_contamination_possible':True,
-            'returns_seen_by_broader_project':cards['mode']=='retrospective','independent_oos':False,
+            'retrospective':cards['mode'] in ('retrospective','retrospective_diagnostic'),'llm_memory_contamination_possible':True,
+            'returns_seen_by_broader_project':cards['mode'] in ('retrospective','retrospective_diagnostic'),'independent_oos':False,
             'investment_efficacy_proven':False,'scored_at':now(),'as_of':as_of,
             'metrics':metrics(tape),'by_fund_horizon':{r['card_id']:metrics([r]) for r in tape},'tape':tape,
             'improvement_proposals':[], 'limitations':['Source, calendar and LLM attestations require independent inspection',
                 'Same-origin funds share market shocks; no independent-sample CI',
                 'Historical assumed availability is not verified point-in-time knowledge',
                 'No automatic promotion, trading or notification; conditional scenarios not counted as direction hits']}
+    result.update(diagnostic_labels(cards['mode']))
     if any(r['llm_hit'] is False for r in tape):
         result['improvement_proposals']=[{'status':'candidate_only_not_registered_or_evaluated',
             'change_area':'research_prompt','one_change':'Add a pre-freeze opposing-evidence checklist',
@@ -215,11 +249,13 @@ def score(frozen, nav_path, manifest_path, as_of, output):
             'support_ids':[r['card_id'] for r in tape if r['llm_hit'] is False],
             'counterexample_ids':[r['card_id'] for r in tape if r['llm_hit'] is True],
             'next_validation':'Separate frozen future comparison under controlled-iteration budget; retain stable version'}]
+    for proposal in result['improvement_proposals']:
+        proposal.update(diagnostic_labels(cards['mode']))
     out=private_dir(output)
     write_json(out/'results.json',result)
     write_json(out/'manifest.json',{'frozen_receipt_sha256':digest(receipt_raw),'frozen_inputs':receipt['hashes'],
         'nav_sha256':digest(nav_raw),'nav_manifest_sha256':digest(manifest_raw),
-        'results_sha256':digest((out/'results.json').read_bytes()),'created_at':now()})
+        'results_sha256':digest((out/'results.json').read_bytes()),'created_at':now(), **diagnostic_labels(cards['mode'])})
     return result
 
 
