@@ -84,13 +84,19 @@ jobs:
       - name: Isolated dependency installation
         run: |
           python -m venv "$RUNNER_TEMP/tradingagents-venv"
-          "$RUNNER_TEMP/tradingagents-venv/bin/python" -m pip install --no-input --disable-pip-version-check --timeout 30 --retries 0 -c "$GITHUB_WORKSPACE/FundPilot/requirements/tradingagents-linux-py312.constraints.txt" "$RUNNER_TEMP/tradingagents[dev]"
+          "$RUNNER_TEMP/tradingagents-venv/bin/python" -m pip install --no-input --disable-pip-version-check --timeout 30 --retries 0 -c "$GITHUB_WORKSPACE/FundPilot/requirements/tradingagents-linux-py312.constraints.txt" -e "$RUNNER_TEMP/tradingagents[dev]"
           "$RUNNER_TEMP/tradingagents-venv/bin/python" -m pip check
           "$RUNNER_TEMP/tradingagents-venv/bin/python" -m pip freeze
       - name: Upstream auth and checkpoint regression (no live account)
         run: |
           cd "$RUNNER_TEMP/tradingagents"
           "$RUNNER_TEMP/tradingagents-venv/bin/python" -m pytest tests/test_chatgpt_auth.py tests/test_chatgpt_provider.py tests/test_checkpoint_resume.py tests/test_checkpoint_lifecycle.py -q
+      - name: Fund adapter with actual upstream and checkpoint resume
+        env:
+          PYTHONPATH: FundPilot
+          FUND_PILOT_UPSTREAM: ${{ runner.temp }}/tradingagents
+        run: |
+          "$RUNNER_TEMP/tradingagents-venv/bin/python" -m unittest discover -s FundPilot/tests -p test_upstream_bridge.py -v
       - name: State upstream verification boundary
         run: |
           printf '%s\n' 'Pinned upstream package execution and offline tests only. No subscription login, paid API, live model or investment result is claimed.' >> "$GITHUB_STEP_SUMMARY"
