@@ -10,6 +10,12 @@ import sys
 import tempfile
 import unittest
 from fundpilot.upstream_bridge import fund_prompt, write_new
+from fundpilot.durable_budget import DurableBudget
+
+def synthetic_budget(root):
+    p=Path(root)/"budget.sqlite"
+    DurableBudget.create(p,run_id="synthetic-run",used=dict(source=0,retry=0,llm=0,prediction_batch=0),candidate_history=[])
+    return p
 
 
 class BridgeContractTests(unittest.TestCase):
@@ -42,7 +48,8 @@ class ActualUpstreamGraphTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);e=root/'evidence.json';out=root/'graph'
             raw=b'{ "fund":"SYNTHETIC:unknown", "information_cutoff":"2020-01-01", "market_report":"SYNTHETIC DATA ONLY", "fundamentals_report":"unknown" }\n'
-            e.write_bytes(raw);e.chmod(0o600);call('start','--evidence',str(e),'--output',str(out))
+            e.write_bytes(raw);e.chmod(0o600);budget=synthetic_budget(root)
+            call('start','--evidence',str(e),'--output',str(out),'--budget',str(budget),'--operation-id','synthetic-graph')
             self.assertEqual((out/'input.json').read_bytes(),raw)
             self.assertEqual(json.loads((out/'receipt.json').read_text())['input_sha256'],hashlib.sha256(raw).hexdigest())
             for i,role in enumerate(('bull','bear','manager'),1):
@@ -113,7 +120,7 @@ class RecoveryEvidenceTests(unittest.TestCase):
             root=Path(td);e=root/'evidence';out=root/'graph';upstream=os.environ['FUND_PILOT_UPSTREAM']
             e.write_text(json.dumps({'fund':'SYNTHETIC','information_cutoff':'2020-01-01',
                 'market_report':'SYNTHETIC original','fundamentals_report':'unknown'}));e.chmod(0o600)
-            start(e,out,upstream)
+            start(e,out,upstream,budget=synthetic_budget(root),operation_id="synthetic-graph")
             q=json.loads((out/'request-1.json').read_text());answer=root/'answer'
             response={'producer':'synthetic_fixture','model_ref':'SYNTHETIC',
                 'generated_at':q['captured_at'],'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC response'}
@@ -152,7 +159,7 @@ class RecoveryEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);e=root/'e';out=root/'graph';u=os.environ['FUND_PILOT_UPSTREAM']
             e.write_text(json.dumps({'fund':'SYNTHETIC','information_cutoff':'2020-01-01',
-                'market_report':'SYNTHETIC','fundamentals_report':'unknown'}));e.chmod(0o600);start(e,out,u)
+                'market_report':'SYNTHETIC','fundamentals_report':'unknown'}));e.chmod(0o600);start(e,out,u,budget=synthetic_budget(root),operation_id="synthetic-graph")
             q=json.loads((out/'request-1.json').read_text());a=root/'answer';a.write_text(json.dumps({
                 'producer':'synthetic_fixture','model_ref':'SYNTHETIC','content':'SYNTHETIC',
                 'prompt_sha256':q['prompt_sha256'],'generated_at':q['captured_at']}));a.chmod(0o600)
@@ -163,4 +170,82 @@ class RecoveryEvidenceTests(unittest.TestCase):
             (root/'hard-answer').unlink()
             db=out/'graph.sqlite';os.link(db,root/'hard-db')
             with self.assertRaises(ValueError):resume(out,a,u)
+            self.assertFalse((out/'response-1.json').exists())
+
+@unittest.skipUnless(os.environ.get('FUND_PILOT_UPSTREAM') and importlib.util.find_spec('langgraph'),
+                     'requires actual pinned graph; synthetic responses only')
+class AtomicBridgeBudgetTests(unittest.TestCase):
+    def fixture(self,root):
+        evidence=root/'evidence';evidence.write_text(json.dumps({'fund':'SYNTHETIC',
+            'information_cutoff':'2020-01-01','market_report':'SYNTHETIC','fundamentals_report':'unknown'}))
+        evidence.chmod(0o600)
+        return evidence,synthetic_budget(root),os.environ['FUND_PILOT_UPSTREAM']
+
+    def test_unknown_usage_and_missing_budget_reject_before_graph_creation(self):
+        from fundpilot.upstream_bridge import start
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);e,b,u=self.fixture(root)
+            with self.assertRaisesRegex(ValueError,'shared budget'):start(e,root/'absent',u)
+            self.assertFalse((root/'absent').exists())
+            unknown=root/'unknown.sqlite'
+            DurableBudget.create(unknown,run_id='synthetic-unknown',used=dict(source=None,retry=None,llm=None,prediction_batch=None),candidate_history=None)
+            with self.assertRaisesRegex(ValueError,'unknown'):start(e,root/'absent',u,budget=unknown,operation_id='one')
+            self.assertFalse((root/'absent').exists())
+
+    def test_thirteen_competing_starts_share_one_batch_and_resume_replay_is_consumed_once(self):
+        from fundpilot.upstream_bridge import resume
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);e,b,u=self.fixture(root);out=root/'graph'
+            cmd=[sys.executable,'-m','fundpilot.upstream_bridge','start','--evidence',str(e),
+                 '--output',str(out),'--upstream',u,'--budget',str(b),'--operation-id','same-start']
+            ps=[subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(13)]
+            results=[(p.communicate(timeout=60),p.returncode) for p in ps]
+            self.assertEqual(sum(rc==0 for _,rc in results),1,results)
+            state=DurableBudget(b).snapshot()
+            self.assertEqual(sum(o['kind']=='prediction_batch' for o in state['operations']),1)
+            self.assertEqual(sum(o['kind']=='llm' for o in state['operations']),1)
+            q=json.loads((out/'request-1.json').read_bytes());a=root/'answer'
+            a.write_text(json.dumps({'producer':'synthetic_fixture','model_ref':'SYNTHETIC',
+                'generated_at':q['captured_at'],'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC'}));a.chmod(0o600)
+            cmd=[sys.executable,'-m','fundpilot.upstream_bridge','resume','--root',str(out),'--response',str(a),'--upstream',u]
+            ps=[subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(3)]
+            results=[(p.communicate(timeout=60),p.returncode) for p in ps]
+            self.assertEqual(sum(rc==0 for _,rc in results),1,results)
+            state=DurableBudget(b).snapshot()
+            self.assertEqual(sum(o['kind']=='checkpoint_resume' for o in state['operations']),1)
+            self.assertEqual(sum(o['kind']=='llm' for o in state['operations']),2)
+            with self.assertRaises(ValueError):resume(out,a,u)
+            before=(out/'response-1.json').read_bytes()
+            DurableBudget(b).stop('synthetic platform warning')
+            q=json.loads((out/'request-2.json').read_bytes());a.write_text(json.dumps({'producer':'synthetic_fixture',
+                'model_ref':'SYNTHETIC','generated_at':q['captured_at'],'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC'}))
+            with self.assertRaisesRegex(ValueError,'stop'):resume(out,a,u)
+            self.assertFalse((out/'response-2.json').exists());self.assertEqual((out/'response-1.json').read_bytes(),before)
+
+    def test_crash_after_resume_claim_is_not_automatically_reexecuted(self):
+        from fundpilot.upstream_bridge import start,resume,digest
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);e,b,u=self.fixture(root);out=root/'graph'
+            start(e,out,u,budget=b,operation_id='synthetic-start')
+            q=json.loads((out/'request-1.json').read_bytes());a=root/'answer'
+            a.write_text(json.dumps({'producer':'synthetic_fixture','model_ref':'SYNTHETIC','content':'SYNTHETIC',
+                'generated_at':q['captured_at'],'prompt_sha256':q['prompt_sha256']}));a.chmod(0o600)
+            # Same durable state a process leaves if it crashes after commit, before graph/file writes.
+            DurableBudget(b).require('synthetic-start/response/1','checkpoint_resume',
+                parent='synthetic-start/request/1',payload={'response_sha256':digest(a.read_bytes())})
+            with self.assertRaisesRegex(ValueError,'already_reserved'):resume(out,a,u)
+            self.assertFalse((out/'response-1.json').exists());self.assertFalse((out/'request-2.json').exists())
+
+    def test_recreated_budget_cannot_replace_checkpoint_binding(self):
+        from fundpilot.upstream_bridge import start,resume
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);e,b,u=self.fixture(root);out=root/'graph'
+            start(e,out,u,budget=b,operation_id='synthetic-start')
+            q=json.loads((out/'request-1.json').read_bytes());a=root/'answer'
+            a.write_text(json.dumps({'producer':'synthetic_fixture','model_ref':'SYNTHETIC','content':'SYNTHETIC',
+                'generated_at':q['captured_at'],'prompt_sha256':q['prompt_sha256']}));a.chmod(0o600)
+            b.rename(root/'preserved-original-budget.sqlite')
+            # Even a replacement with the same declared run ID gets another ledger identity.
+            synthetic_budget(root)
+            with self.assertRaisesRegex(ValueError,'budget identity mismatch'):resume(out,a,u)
             self.assertFalse((out/'response-1.json').exists())

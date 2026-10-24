@@ -249,6 +249,12 @@ def verify_inputs(root, snapshot):
 def record_result(root, result, sequence, graph):
     interrupts = result.get('__interrupt__', ())
     if interrupts:
+        from .durable_budget import DurableBudget
+        binding=json.loads(read_private(Path(root)/'receipt.json'))['budget']
+        ledger=DurableBudget(binding['path'])
+        if ledger.snapshot()['seed']['ledger_id']!=binding['ledger_id']:raise ValueError('budget identity mismatch')
+        ledger.require(binding['operation_id']+f'/request/{sequence}', 'llm',
+            payload={'prompt_sha256':interrupts[0].value['prompt_sha256'],'root':str(Path(root).absolute())})
         write_new(Path(root)/f'request-{sequence}.json', {**interrupts[0].value,
                   'checkpoint_id':graph.get_state(config()).config['configurable']['checkpoint_id']})
         return {'status':'awaiting_current_llm', 'request':str(Path(root)/f'request-{sequence}.json')}
@@ -259,16 +265,25 @@ def record_result(root, result, sequence, graph):
     return {'status':'completed_research_graph', **SCOPE}
 
 
-def start(evidence_path, output, upstream):
+def start(evidence_path, output, upstream, *, budget=None, operation_id=None):
+    from .durable_budget import DurableBudget
+    if budget is None or not operation_id:raise ValueError('shared budget and stable operation ID required')
+    ledger=DurableBudget(budget)
+    ledger.require_known('prediction_batch','llm')
     raw = read_private(evidence_path); e = json.loads(raw)
     for k in ('fund', 'information_cutoff', 'market_report', 'fundamentals_report'):
         if not isinstance(e.get(k), str) or not e[k].strip(): raise ValueError('missing '+k)
     if '..' in Path(output).parts: raise ValueError('parent traversal rejected')
     out = Path(os.path.abspath(output))
+    with private_parent(out):pass
+    ledger.require(operation_id,'prediction_batch',payload={'input_sha256':digest(raw),'root':str(out)})
     with private_parent(out) as (parent, name): os.mkdir(name, mode=0o700, dir_fd=parent)
     write_bytes_new(out/'input.json', raw)
     write_new(out/'receipt.json', {'actual_started_at':now(), 'input_sha256':digest(raw),
-              'upstream_sha':PIN, 'bridge_schema':2, 'max_responses':3, 'api_usage':'unknown', **SCOPE})
+              'upstream_sha':PIN, 'bridge_schema':2,
+              'budget':{'path':str(ledger.path),'run_id':ledger.snapshot()['seed']['run_id'],
+                        'ledger_id':ledger.snapshot()['seed']['ledger_id'],'operation_id':operation_id},
+              'max_responses':3, 'api_usage':'unknown', **SCOPE})
     state = {'messages':[], 'company_of_interest':e['fund'], 'asset_type':'fund',
              'instrument_context':e['fund']+'; watchlist only, holdings unknown. '+e.get('context',''),
              'trade_date':e['information_cutoff'][:10],
@@ -283,7 +298,8 @@ def start(evidence_path, output, upstream):
 def resume(root, response_path, upstream):
     from langgraph.types import Command
     root = private_root(root)
-    response = json.loads(read_private(response_path))
+    response_raw = read_private(response_path)
+    response = json.loads(response_raw)
     if (root/'result.json').exists(): raise ValueError('completed graph cannot accept another response')
     # Resume must not create a fresh DB in place of missing recovery evidence.
     read_private(root/'graph.sqlite')
@@ -323,17 +339,38 @@ def resume(root, response_path, upstream):
         generated = checked_time(response['generated_at'])
         if not checked_time(saved['captured_at']) <= generated <= datetime.now(timezone.utc):
             raise ValueError('response generation must follow persisted request capture')
+        from .durable_budget import DurableBudget
+        binding=json.loads(read_private(root/'receipt.json')).get('budget')
+        if not binding:raise ValueError('legacy graph has no shared budget; no automatic migration')
+        ledger=DurableBudget(binding['path'])
+        seed=ledger.snapshot()['seed']
+        if (seed['run_id'],seed['ledger_id'])!=(binding['run_id'],binding['ledger_id']):
+            raise ValueError('budget identity mismatch')
+        ledger.require(binding['operation_id']+f'/response/{n}','checkpoint_resume',
+            parent=binding['operation_id']+f'/request/{n}',payload={'response_sha256':digest(response_raw)})
         write_new(root/f'response-{n}.json', response)
         return record_result(root, graph.invoke(Command(resume=response), config(root)), n+1, graph)
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__); sub=p.add_subparsers(dest='command',required=True)
+    init=sub.add_parser('budget-init');init.add_argument('--seed',required=True);init.add_argument('--budget',required=True)
+    stop=sub.add_parser('budget-stop');stop.add_argument('--budget',required=True);stop.add_argument('--reason',required=True)
     a=sub.add_parser('start'); a.add_argument('--evidence',required=True);a.add_argument('--output',required=True)
+    a.add_argument('--budget',required=True);a.add_argument('--operation-id',required=True)
     b=sub.add_parser('resume');b.add_argument('--root',required=True);b.add_argument('--response',required=True)
     for x in (a,b): x.add_argument('--upstream',required=True)
     a=p.parse_args()
-    result=start(a.evidence,a.output,a.upstream) if a.command=='start' else resume(a.root,a.response,a.upstream)
+    if a.command in ('budget-init','budget-stop'):
+        from .durable_budget import DurableBudget
+        if a.command=='budget-init':
+            seed=json.loads(read_private(a.seed))
+            DurableBudget.create(a.budget,**seed)
+            result={'status':'initialized_operations_only','actual_tokens':'unknown'}
+        else:
+            DurableBudget(a.budget).stop(a.reason);result={'status':'stopped'}
+        print(json.dumps(result));return
+    result=start(a.evidence,a.output,a.upstream,budget=a.budget,operation_id=a.operation_id) if a.command=='start' else resume(a.root,a.response,a.upstream)
     print(json.dumps(result,ensure_ascii=False))
 
 if __name__=='__main__':main()

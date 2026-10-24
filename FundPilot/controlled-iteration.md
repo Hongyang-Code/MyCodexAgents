@@ -29,11 +29,11 @@ config/research-budget.json 固定以下上限，不是账户token硬限：
 
 fundpilot.iteration_control 提供 check_config、不可变RunBudget、register_candidate、review_candidate。操作前reserve，重复ID返回already_reserved_do_not_execute；失败不退预算，finish只释放并发槽。stop使本轮后续预留全部停止。record_usage保存实际数值或None，不推算余额。reserve的reserved只是本地预留状态，不是额外权限或已经执行。
 
-调用方必须在动作前把预留、候选注册和评估占用写入同一私有持久状态，串行或原子比较更新；传入完整历史并检查返回状态。并发、重启、多个进程共享预算的强原子记账及恢复尚未实现。若不能确认私有完整状态或独占执行权，保守阻断新的动作/候选，不用空状态重新开始。模块本身不执行工具、不持久化、不拦截隐藏调用，不能称平台级硬执法。
+调用方必须在动作前把预留、候选注册和评估占用写入同一私有持久状态，串行或原子比较更新；传入完整历史并检查返回状态。原本纯内存接口不提供跨进程记账。现有upstream_bridge start/resume已接入durable_budget的私有SQLite事务预留与重复ID拒绝，初始化、未知用量及崩溃恢复边界见upstream-adaptation.md；其他纯校验接口和未接入的外部工具不能据此称已受共享预算保护。若不能确认私有完整状态或独占执行权，保守阻断新的动作/候选，不用空状态重新开始。iteration_control模块本身不执行工具、不持久化、不拦截隐藏调用；durable_budget仅持久操作预留，不计量账户token，不能称平台级硬执法。
 
 register_candidate检查声明和七天间隔；review_candidate检查相同证据/评价引用、反例记录、有限指标和一次评估声明。输入中的哈希、复核引用、布尔结果仍需独立核验，不能自签通过；函数不会验证真实样本独立性、统计充分性或引用内容。评估合约原字节和哈希由独立私有冻结记录保管，候选不得控制。调用方必须先通过register_candidate并保存原协议，再将该原协议用于review_candidate，不接受候选提供的替代协议。
 
-当前未接入DailyRunner、实际LLM编排、套餐读取或自动晋级，没有进行真实候选搜索。合成测试仅验证本地边界，不证明预测改善或生产预算控制有效。
+当前仅桥接图的批次/请求/响应执行接通持久预留；未接入DailyRunner、原生SDK推理、套餐读取或自动晋级，没有进行真实候选搜索。合成测试仅验证本地边界，不证明预测改善或生产预算控制有效。
 
 ## 决策净收益目标
 

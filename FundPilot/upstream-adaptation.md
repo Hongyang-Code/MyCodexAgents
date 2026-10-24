@@ -18,12 +18,13 @@
 
 每个响应只接受actual_current_llm或synthetic_fixture；这些身份声明需要外部记录核验，程序不能证明文字究竟由谁产生。合成测试记录synthetic_fixture，不当真实模型。每图最多三份响应，失败保留，不自动修复重试；该限制不能替代调用方跨运行私有预算。没有完整旧候选历史时，禁止用新目录重置七天结构候选额度。
 
-命令在仓库根目录执行，真实输入、输出、检查点及响应全部放在checkout之外：
+命令在仓库根目录执行，真实输入、输出、检查点、预算种子及响应全部放在checkout之外。先初始化同一份共享预算，详见下节；未知旧用量不能填写0：
 
 ```bash
 PYTHONPATH=FundPilot /private/venv/bin/python -m fundpilot.upstream_bridge start \
   --evidence /private/evidence.json --output /private/new-graph \
-  --upstream /private/pinned-tradingagents
+  --upstream /private/pinned-tradingagents \
+  --budget /private/project/budget.sqlite --operation-id reviewed-stable-batch-id
 PYTHONPATH=FundPilot /private/venv/bin/python -m fundpilot.upstream_bridge resume \
   --root /private/new-graph --response /private/actual-response.json \
   --upstream /private/pinned-tradingagents
@@ -72,3 +73,31 @@ resume先核对input.json原字节与receipt哈希，再与SQLite检查点的输
 请求第一次进入真实节点中断时捕获带时区captured_at，并持久保存。LangGraph重放从原请求复用该时间；响应生成时间须不早于该原始捕获时间且不晚于实际检查时间。时间检查在保存响应前执行，拒绝旧响应而不误拒绝晚于原捕获、早于重放的合法响应。旧v1记录缺少这些证据时失败关闭，不自动迁移或改写旧真实研究。
 
 新增实质回归覆盖checkout、父/叶符号链接、非私有目录/文件、硬链接、FIFO、原始输入/receipt单独和协同篡改、请求时间/提示/检查点ID篡改、历史请求/响应篡改、检查点原证据改变、过早响应，以及跨进程重放复用捕获时间。均使用合成输入和真实安装的上游图，无新增真实LLM/来源请求、历史收益计算或结构候选。私有权限和本地相互核对仍不能防同一文件所有者同时改写所有证据，不宣称远程WORM或完整抵御同uid攻击。
+
+
+## 共享原子预算与实际入口
+
+`start`现在必须提供`--budget`和稳定的`--operation-id`。预算文件由Python标准库SQLite保存，直接复用现有私有路径边界，没有新增依赖。每笔预留在`BEGIN IMMEDIATE`事务内检查并提交，先于对外发布请求或消费响应；失败不退还，重复ID不再授权执行，同ID换参数也拒绝。启动一批最多一基金、三份请求；本批模型请求上限12、主要来源含重试总上限12、瞬时重试至多1，均未扩额。
+
+预算初始化使用已有`upstream_bridge`命令入口，种子必须是私有原始JSON：
+
+```json
+{"run_id":"reviewed-shared-run","used":{"source":null,"retry":null,"llm":null,"prediction_batch":null},"candidate_history":null}
+```
+
+```bash
+PYTHONPATH=FundPilot /private/venv/bin/python -m fundpilot.upstream_bridge budget-init \
+  --seed /private/project/reviewed-seed.json --budget /private/project/budget.sqlite
+PYTHONPATH=FundPilot /private/venv/bin/python -m fundpilot.upstream_bridge budget-stop \
+  --budget /private/project/budget.sqlite --reason platform_warning
+```
+
+这是安全的未知状态示例，会拒绝新动作。只有经独立核对的实际操作计数才可填非负整数；0须确实已知，不能从空预留推断。`candidate_history`须保留完整原记录，未知用null；旧`attempted_at`与`counts_toward_next_7_day_change_budget=true`原样保留。不得用新的目录、run_id、空历史或新账本绕过旧消耗。初始化拒绝覆盖已有文件；切换运行或恢复导入需要先审阅账本及完整历史，不自动创建/迁移/清零。程序不能替调用方证明导入历史完整。
+
+`start`原子占用批次；真实上游图的每次中断，在写出可供宿主LLM读取的请求前占用`llm`操作；`resume`从受检查点锚定的receipt读取同一账本、run_id和操作ID，以独立响应ID原子占用一次再写入响应并推进图。resume不接受另一个预算参数；旧图没有绑定则拒绝自动迁移。并发重复start/resume只有一次获得执行权。纯冻结/校验入口不发模型或来源请求，仍仅进行形状和证据检查，不以其内存RunBudget充作共享执行授权。
+
+已提交预留但未完成的动作保持占用，重启后不自动执行第二次。尤其崩溃在“预留完成、响应或检查点尚未写完”之间时，旧请求/检查点可保留，但恢复执行保守拒绝，须人工核对准确结果再另作受审恢复；没有自动的恰好一次外部副作用保证。stop持久化并禁止后续动作；调用者观察到平台额度警告必须先调用budget-stop，不能自动重试。账本/父目录权限、符号链接、硬链接、只读、缺失或SQLite/JSON/校验和损坏时失败关闭，不创建空账本冒充恢复。私有SQLite与校验和不防文件所有者恶意同步改写所有数据。
+
+`DurableBudget.reserve`还提供来源/瞬时重试与候选/一次评价的原子占用。候选按持久原历史及所有已占用候选检查滚动七天，时间在程序内捕获，不接受调用方倒填；评价须关联本账本候选且只占用一次。当前没有实际外部来源抓取器或候选执行器接入这个模块，不声称通用工具、外部连接器或所有潜在调用已被拦截。旧register_candidate/review_candidate是纯声明校验，不是执行授权。SQLite要求支持可靠本地文件锁的同一权威文件；不同机器各自下载的快照不构成共享锁。跨机器并发、分布式租约/栅栏和自动跨机器图迁移未实现，须维持唯一执行者，不能宣称已经分布式互斥。共享账本不能计量不可见的账户token、当前会话上下文或平台隐藏请求；实际token及账户余量继续unknown。桥接预留约束的是请求发布与响应消费；宿主绕过入口手动重复调用同一提示不在CLI可见范围，真实LLM消耗仍需外部轨迹核对。
+
+复验包括13进程同ID只成功一次、13个不同ID共12次上限、失败/重试总额、进程commit后强制退出再重放、持久stop、unknown/损坏/权限/链接拒绝、保留两条历史，以及真实安装上游的13并发start、并发resume和恢复占用中断。全部使用合成材料和synthetic_fixture，不产生真实模型/来源请求、收益评价或结构候选。工程验收独立于12个月历史策略验收；项目仍未完成。
