@@ -12,6 +12,91 @@
 
 这是对原生节点的有限图组合，不声称运行了完整 TradingAgentsGraph 或完成全部股票工具替换。经理沿用上游只接收辩论历史的设计；尚未验证证据压缩是否遗漏重要资料。
 
+## 干净 Linux 安装
+
+基础CLI支持Python 3.11+；本适配的版本约束和已验证上游依赖组合是Linux/Python 3.12。上游自身声明>=3.11，不等于本项目已验证3.11上的全部依赖组合。以下从仓库根目录执行；shell变量不填用户凭据。`FP_PRIVATE`必须是checkout外的新私有目录，`FP_UPSTREAM`和`FP_VENV`也在checkout外。示例先建立全新合成目录；实际项目应恢复已有私有账本，不能重新生成零种子。
+
+```bash
+# 首次从GitHub取得项目，已克隆者先fetch并使用获准分支。
+git clone --single-branch --branch fundpilot/opensource-adaptation-20261024 \
+  https://github.com/Hongyang-Code/MyCodexAgents.git MyCodexAgents
+cd MyCodexAgents
+FP_PRIVATE=$(mktemp -d /tmp/fundpilot-synthetic.XXXXXXXX)
+FP_UPSTREAM=$(mktemp -d /tmp/fundpilot-upstream.XXXXXXXX)
+FP_VENV=$(mktemp -d /tmp/fundpilot-venv.XXXXXXXX)
+git -C "$FP_UPSTREAM" init
+git -C "$FP_UPSTREAM" remote add origin https://github.com/TauricResearch/TradingAgents.git
+git -C "$FP_UPSTREAM" fetch --depth=1 origin e8f5503e9b86d5c2710b0c76b1f686703968c9df
+git -C "$FP_UPSTREAM" checkout --detach FETCH_HEAD
+python3.12 -m venv "$FP_VENV"
+"$FP_VENV/bin/python" -m pip install --no-input --timeout 30 --retries 0 \
+  -c FundPilot/requirements/tradingagents-linux-py312.constraints.txt -e "$FP_UPSTREAM[dev]"
+"$FP_VENV/bin/python" -m pip check
+export PYTHONPATH="$PWD/FundPilot"
+export FUND_PILOT_UPSTREAM="$FP_UPSTREAM"
+```
+
+可以复用已核对SHA、无已跟踪修改的上游checkout；仍需独立venv，导入路径必须指向该checkout。用本机包管理工具替代pip时也应保留同一约束和可编辑导入；约束文件不是wheel哈希锁。两上游的许可证/对照范围见下节，FinRobot不需要为运行本桥接而安装。
+
+先运行已有合成方法，无需模型/API/来源请求：
+
+```bash
+"$FP_VENV/bin/python" -m unittest discover -s FundPilot/tests -p test_upstream_bridge.py -v
+```
+
+只针对上述全新合成目录准备已知零用量，再走可逐步观察的三次跨进程恢复。不要把这段合成种子或响应拿去初始化真实项目。
+
+```bash
+export FP_PRIVATE FP_VENV FP_UPSTREAM
+"$FP_VENV/bin/python" - <<'PY_SYNTHETIC_INPUT'
+import json, os
+from pathlib import Path
+p=Path(os.environ['FP_PRIVATE'])
+files={
+ 'seed.json':{'run_id':'SYNTHETIC_NEW_RUN_ONLY','used':{'source':0,'retry':0,'llm':0,'prediction_batch':0},'candidate_history':[]},
+ 'evidence.json':{'fund':'SYNTHETIC:unknown','information_cutoff':'2020-01-01T00:00:00+08:00',
+                  'market_report':'SYNTHETIC DATA ONLY; no public source fetched',
+                  'fundamentals_report':'unknown','context':'synthetic transport; not a holding'}}
+for name,value in files.items():
+ f=p/name
+ with f.open('x') as out:json.dump(value,out)
+ f.chmod(0o600)
+PY_SYNTHETIC_INPUT
+"$FP_VENV/bin/python" -m fundpilot.upstream_bridge budget-init \
+  --seed "$FP_PRIVATE/seed.json" --budget "$FP_PRIVATE/budget.sqlite"
+"$FP_VENV/bin/python" -m fundpilot.upstream_bridge start \
+  --evidence "$FP_PRIVATE/evidence.json" --output "$FP_PRIVATE/graph" \
+  --budget "$FP_PRIVATE/budget.sqlite" --operation-id synthetic-new-graph --upstream "$FP_UPSTREAM"
+for FP_SEQUENCE in 1 2 3; do
+  export FP_SEQUENCE
+  "$FP_VENV/bin/python" - <<'PY_SYNTHETIC_RESPONSE'
+import json, os
+from pathlib import Path
+from datetime import datetime, timezone
+p=Path(os.environ['FP_PRIVATE']);n=os.environ['FP_SEQUENCE']
+q=json.loads((p/'graph'/f'request-{n}.json').read_bytes())
+r={'producer':'synthetic_fixture','model_ref':'SYNTHETIC_NOT_LLM',
+   'generated_at':datetime.now(timezone.utc).isoformat(),
+   'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC response only'}
+f=p/f'response-{n}.json'
+with f.open('x') as out:json.dump(r,out)
+f.chmod(0o600)
+PY_SYNTHETIC_RESPONSE
+  "$FP_VENV/bin/python" -m fundpilot.upstream_bridge resume \
+    --root "$FP_PRIVATE/graph" --response "$FP_PRIVATE/response-$FP_SEQUENCE.json" --upstream "$FP_UPSTREAM"
+done
+"$FP_VENV/bin/python" - <<'PY_SYNTHETIC_RESULT'
+import json, os
+from pathlib import Path
+r=json.loads((Path(os.environ['FP_PRIVATE'])/'graph/result.json').read_bytes())
+print({k:r[k] for k in ('bridge_responses','response_producers','trading_authorized','native_upstream_llm_api_called')})
+assert r['bridge_responses']==3 and r['response_producers']==['synthetic_fixture']*3
+assert r['trading_authorized'] is False and r['native_upstream_llm_api_called'] is False
+PY_SYNTHETIC_RESULT
+```
+
+完成后再次resume必须失败，旧请求/响应/结果不覆盖；同一operation-id也不能重复start。`request-1/2/3.json`分别是bull/bear/manager请求；未完成时读取最新request即可了解等待角色。上述打印只显示传输状态，不签认模型身份或投资资格。既有测试还验证并发与崩溃，不需要为此生成真实模型响应。
+
 ## 实际当前 LLM 桥接
 
 无API密钥时，图在真实节点的llm.invoke边界产生interrupt，保存提示及SHA256。当前会话LLM读取提示，实际生成响应并记录真实时间、模型标识和提示哈希，再由新进程resume。它不调用上游原生LLM API，不伪造SDK调用或usage。模型精确快照未知时明确unknown。
@@ -101,3 +186,44 @@ PYTHONPATH=FundPilot /private/venv/bin/python -m fundpilot.upstream_bridge budge
 `DurableBudget.reserve`还提供来源/瞬时重试与候选/一次评价的原子占用。候选按持久原历史及所有已占用候选检查滚动七天，时间在程序内捕获，不接受调用方倒填；评价须关联本账本候选且只占用一次。当前没有实际外部来源抓取器或候选执行器接入这个模块，不声称通用工具、外部连接器或所有潜在调用已被拦截。旧register_candidate/review_candidate是纯声明校验，不是执行授权。SQLite要求支持可靠本地文件锁的同一权威文件；不同机器各自下载的快照不构成共享锁。跨机器并发、分布式租约/栅栏和自动跨机器图迁移未实现，须维持唯一执行者，不能宣称已经分布式互斥。共享账本不能计量不可见的账户token、当前会话上下文或平台隐藏请求；实际token及账户余量继续unknown。桥接预留约束的是请求发布与响应消费；宿主绕过入口手动重复调用同一提示不在CLI可见范围，真实LLM消耗仍需外部轨迹核对。
 
 复验包括13进程同ID只成功一次、13个不同ID共12次上限、失败/重试总额、进程commit后强制退出再重放、持久stop、unknown/损坏/权限/链接拒绝、保留两条历史，以及真实安装上游的13并发start、并发resume和恢复占用中断。全部使用合成材料和synthetic_fixture，不产生真实模型/来源请求、收益评价或结构候选。工程验收独立于12个月历史策略验收；项目仍未完成。
+
+
+## 真实历史证据与宿主响应模板
+
+真实项目先恢复最新私有状态，核对阶段权限、旧预算、完整候选历史及唯一执行者。unknown用null，不复用合成零种子。`budget-init`不是重置/扩额命令；已有账本直接恢复，不重新初始化。证据JSON仍是单基金格式：
+
+```json
+{
+  "fund": "<已核对的基金代码:份额类别；未知类别明确unknown>",
+  "information_cutoff": "<带时区历史资料截点>",
+  "market_report": "<公开来源ID/URL、对应版本发布时间、实际抓取与已知时间、原字节哈希、事实及反证>",
+  "fundamentals_report": "<基金实际暴露、A/C逐批费用、申赎/确认/到账与分红等已核实事实；缺失unknown>",
+  "context": "retrospective/reused_development/non-OOS；LLM历史记忆风险；观察基金不等于持仓；无现实指导"
+}
+```
+
+尖括号是需要人工替换的模板，不是已核实资料。自由文本输入不会由程序自动验证来源事实或历史可得性；保留原始公开材料、哈希与独立审校。不要向LLM提供真实账户或凭据。用前述start命令冻结输入后，每次按以下步骤恢复，不能自动把合成响应改标为真实：
+
+1. 宿主完整读取待处理request的prompt、prompt_sha256、role和captured_at，把prompt交给当前已获授权LLM；这是实际人工/Agent宿主步骤，CLI自身不调用SDK。
+2. 保存该次实际生成的完整原文，并由实际执行生成的宿主记录真实generated_at和可知model_ref；未知模型快照明写unknown。generated_at不得用历史cutoff、旧响应时间或事后包装时间冒充。
+3. 在私有response-N.json中填producer=actual_current_llm、对应prompt_sha256、model_ref、generated_at、content。文件0600、父目录0700；模型身份声明须由外部调用记录核对。然后单独新进程运行resume，得到下一角色请求；共三份，完成后读取result.json。失败及未知结果先保存，不自动重试。
+
+可交给宿主LLM的执行指令：读取指定request.json的完整prompt，只依据其冻结证据回答；保留来源ID、反证、失效条件、未知和历史污染限制；不要自行抓取新来源、交易或改预算；返回实际生成原文和可审计的生成时间/模型标识，由宿主写入响应，不伪称上游原生API调用。原生SIWC仍需本人官方授权，本模板不登录或读取任何凭据。
+
+## 冻结恢复和验收出口
+
+start保存input.json原字节、receipt和图检查点；每份request、response及result是独立新文件，不覆盖旧件。执行进程完全关闭后，保存graph目录全部文件及其绑定的budget.sqlite、原证据/响应输入、文件SHA256清单与最新私有状态。上传到已授权私有持久存储并重新取回核对；本地/tmp或0700权限不能代替持久保存。恢复时保留唯一权威账本身份和原receipt引用，核对原路径/输入/检查点再resume；不能只复制graph、另建零预算。跨机器路径重定位/分布式唯一执行没有自动迁移，须审查恢复，不能把两份快照并发运行。退出进程后的同路径文件恢复由合成测试实际验证。
+
+图result.json是带scope的研究状态，不是已核实估值日历的评分卡或投资验收报告。后续若获准评价，先按[llm-loop.md](llm-loop.md)独立映射来源、原生成时间、1/5/20估值日D0/Dh及日历；未知资格保留pending，不直接自动转换或回填旧卡。freeze保存cards/sources/calendar原字节；score读取后续NAV，仍不得冒称OOS。资金条件比较与[historical-acceptance.md](historical-acceptance.md)的12个月门槛另判，本批没有运行真实收益评价。完整执行机制、生产采集、跨机唯一执行、私有调度及真实模型身份审核仍需外部支持；本CLI不因工程跑通自动完成这些能力。
+
+资料与权限齐备后，已有冻结和验收入口的最小命令如下；这些不是上面合成传输脚本的自动后续，不生成缺失证据，也不在本批运行真实评分：
+
+```bash
+"$FP_VENV/bin/python" -m fundpilot.llm_loop freeze \
+  --cards "$FP_PRIVATE/cards.json" --sources "$FP_PRIVATE/sources.json" \
+  --calendar "$FP_PRIVATE/calendar.json" --output "$FP_PRIVATE/new-frozen-cards"
+"$FP_VENV/bin/python" -m fundpilot.acceptance \
+  --input "$FP_PRIVATE/qualified-episodes.json" --output "$FP_PRIVATE/new-acceptance-run"
+```
+
+freeze的receipt与验收输出各自私有保存；验收工具不会从图结果推导净收益/CPI、签认独立性或自动准许现实指导。输入schema见对应文档，不将synthetic_fixture改名为真实证据。

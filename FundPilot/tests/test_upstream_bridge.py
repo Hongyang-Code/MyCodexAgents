@@ -249,3 +249,38 @@ class AtomicBridgeBudgetTests(unittest.TestCase):
             synthetic_budget(root)
             with self.assertRaisesRegex(ValueError,'budget identity mismatch'):resume(out,a,u)
             self.assertFalse((out/'response-1.json').exists())
+
+    def test_closed_private_snapshot_restored_at_same_paths_then_three_process_resumes(self):
+        """Restore a pending graph and its charged ledger, never a fresh zero seed."""
+        import zipfile
+        from fundpilot.upstream_bridge import start
+        with tempfile.TemporaryDirectory() as td:
+            root=Path(td);e,b,u=self.fixture(root);out=root/'graph'
+            start(e,out,u,budget=b,operation_id='synthetic-custody')
+            original={p.name:p.read_bytes() for p in out.iterdir()}
+            ledger_raw=b.read_bytes();archive=root/'closed-private-checkpoint.zip'
+            with zipfile.ZipFile(archive,'w') as z:
+                for name,raw in original.items():z.writestr('graph/'+name,raw)
+                z.writestr('budget.sqlite',ledger_raw)
+            out.rename(root/'preserved-original-graph');b.rename(root/'preserved-original-budget.sqlite')
+            out.mkdir(mode=0o700)
+            with zipfile.ZipFile(archive) as z:
+                self.assertIsNone(z.testzip())
+                for name,raw in original.items():
+                    self.assertEqual(z.read('graph/'+name),raw)
+                    f=out/name;f.write_bytes(z.read('graph/'+name));f.chmod(0o600)
+                b.write_bytes(z.read('budget.sqlite'));b.chmod(0o600)
+            self.assertEqual(b.read_bytes(),ledger_raw)
+            self.assertEqual(len(DurableBudget(b).snapshot()['operations']),2)
+            for n in (1,2,3):
+                q=json.loads((out/f'request-{n}.json').read_bytes());answer=root/f'answer-{n}.json'
+                answer.write_text(json.dumps({'producer':'synthetic_fixture','model_ref':'SYNTHETIC_NOT_LLM',
+                    'prompt_sha256':q['prompt_sha256'],'generated_at':datetime.now(timezone.utc).isoformat(),
+                    'content':'SYNTHETIC restored checkpoint response'}));answer.chmod(0o600)
+                subprocess.run([sys.executable,'-m','fundpilot.upstream_bridge','resume','--root',str(out),
+                    '--response',str(answer),'--upstream',u],check=True,capture_output=True,text=True)
+            result=json.loads((out/'result.json').read_bytes())
+            self.assertEqual(result['response_producers'],['synthetic_fixture']*3)
+            self.assertEqual(result['bridge_responses'],3)
+            self.assertEqual((root/'preserved-original-budget.sqlite').read_bytes(),ledger_raw)
+            for name,raw in original.items():self.assertEqual((root/'preserved-original-graph'/name).read_bytes(),raw)

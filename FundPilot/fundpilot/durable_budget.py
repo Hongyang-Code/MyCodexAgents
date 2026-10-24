@@ -73,7 +73,9 @@ class DurableBudget:
                     finally:os.close(j)
                 old=os.umask(0o077)
                 try:
-                    with closing(sqlite3.connect(f'file:/proc/self/fd/{parent}/{quote(name,safe='')}?mode=rw',uri=True,timeout=10)) as c:
+                    quoted_name = quote(name, safe='')
+                    database_uri = f'file:/proc/self/fd/{parent}/{quoted_name}?mode=rw'
+                    with closing(sqlite3.connect(database_uri,uri=True,timeout=10)) as c:
                         st=os.stat(name,dir_fd=parent,follow_symlinks=False)
                         if (st.st_dev,st.st_ino)!=(s.st_dev,s.st_ino):raise ValueError('ledger replaced during open')
                         c.execute('PRAGMA synchronous=FULL')
