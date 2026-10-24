@@ -38,10 +38,15 @@ python -m venv "$UPSTREAM_WORK/venv"
 
 ## 复用边界与许可
 
-上游源码[LICENSE](https://github.com/TauricResearch/TradingAgents/blob/e8f5503e9b86d5c2710b0c76b1f686703968c9df/LICENSE)为Apache-2.0。当前提交仅增加云端安装与相关测试，尚未把它的研究节点接入基金真实LLM流程；后续必须给出实际调用轨迹。全部传递依赖的许可证/供应链审计尚未完成。
+上游源码[LICENSE](https://github.com/TauricResearch/TradingAgents/blob/e8f5503e9b86d5c2710b0c76b1f686703968c9df/LICENSE)为Apache-2.0。首次CI提交仅增加云端安装与相关测试。后续已接入原生研究节点与真实当前会话LLM桥接，调用范围及限制见[upstream-adaptation.md](upstream-adaptation.md)；不将桥接称原生API调用。全部传递依赖的许可证/供应链审计尚未完成。
 
 GitHub公开仓库标准Linux runner在当前官方计费说明中免费；未启用较大runner、付费模型或收费数据源，没有上传artifact。本CI不带账户密钥，不读取私有档案，不运行真实基金研究。
 
 ## 仍未通过的验收
 
-真实LLM调用、基金数据/渠道规则适配、完整历史净成本比较、受控研究改进、私有跨任务恢复和云端调度均须另验。短期方向/Brier不能证明12个月不亏或抗通胀，LLM自报概率不能作为通过依据。达到历史门槛之前保持研发与模拟，现实指导禁用。
+已完成一个真实当前会话LLM桥接历史诊断，并有独立新云任务恢复和只读算术核对。原生SDK推理/认证、完整基金渠道/费用/日历、严格历史净收益与独立12个月验收、受控研究改进及定时首次触发仍需分别验收。短期方向/Brier不能证明12个月不亏或抗通胀，LLM自报概率不能作为通过依据。达到历史门槛之前保持研发与模拟，现实指导禁用。
+
+
+## 适配后的CI
+
+[固定11a72c45的云端运行](https://github.com/Hongyang-Code/MyCodexAgents/actions/runs/40077787113)完成292项基础回归（3项可选集成skip）、23项和12项跨模块回归；上游环境另外实际执行10项基金桥接/恢复测试与65项上游离线测试，均通过。工作流以editable方式加载已验证的干净上游checkout，核对实际Git提交和导入路径；版本约束安装也已实际通过。不读取私有研究档案或模型凭据。

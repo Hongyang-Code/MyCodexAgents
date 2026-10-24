@@ -50,3 +50,10 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 真实资料不放 Git。采用 checkout 外私有 Library 快照和版本化 HEAD；临时工作目录不是持久存储。FundPilot/.gitignore 仅作补充防护，提交前仍须逐文件审计。不能把真实资产替换进合成测试后提交。
 
 首次使用可提供截图；自动识别结果要保留置信度、原始证据和待核对项。当前代码接收核对后的结构化字段，未宣称具备已验收的 OCR。风险参数和资产未知时只做非个性化研究。
+
+
+## 当前历史研发入口
+
+按AGENTS.md的当前阶段，只开展历史研究与模拟，现实指导和前瞻运行禁用。真实开源节点桥接及命令见[upstream-adaptation.md](upstream-adaptation.md)，12个月固定门槛与私有CLI见[historical-acceptance.md](historical-acceptance.md)，工程实跑见[CLOUD-VERIFICATION.md](CLOUD-VERIFICATION.md)。
+
+原有短期数值评分不替代年度资金验收。资格声明必须回查证据，缺日历、份额/渠道规则、完整费用、CPI或独立样本时保持pending。项目执行状态与研究档案只在私有存储，不从README推定服务正在运行。
