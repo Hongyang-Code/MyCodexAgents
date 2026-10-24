@@ -123,3 +123,11 @@ git diff --check
 9项新增合成回归覆盖真实CLI子进程、原始冻结锚点、旧文件原字节不变、缺资格/日历/NAV、未成熟/范围不足、哈希/对象替换拒绝、提前标签/迟审阅、后补字段不完整及冻结后取得对象阻断。仅合成数据获得成熟评分；真实未来NAV尚未出现，未宣称真实评分成功。资格/完整性均为外部审阅声明，无联网核实；known-before-freeze不等于information_cutoff资格证明，旧strict入口和交易门禁不变。
 
 本次完整FundPilot263项、ResearchHotspotFollow23项、TextReadable12项、compileall、发布/结构/diff检查通过；本地工程验收不等于CI或真实研究兑现。
+
+## 固定上游实际适配 2026年10月24日
+
+从交接5ffe8eb建立独立分支，已整合协作方57cac36的Linux CI提交，不修改main或交接分支。当前云端Work Linux Ubuntu24.04.3 / Python3.12.14实际复验原263/23/12项全部通过；另固定上游TradingAgents隔离安装87包、FinRobot V2隔离安装146包。FinRobot离线test_signal_finite_prices.py实际4项通过；没有调用其模型、真实账户或桌面服务。
+
+新增4项桥接测试实际全部通过，含真实安装上游节点和不同子进程SQLite恢复；合成响应不冒称LLM。一次原输入字节保留修复经固定回归验证。验收辅助草稿曾与桥接一并通过271项，现已排除，由主任务独占验收模块；桥接独立交付时FundPilot267项、ResearchHotspotFollow23项、TextReadable12项通过，compileall、发布检查及diff检查通过。标准环境缺可选依赖时集成项明确skip。通用适配与限制见upstream-adaptation.md。
+
+私有真实历史执行已完成原生多空研究节点与经理的三份当前LLM桥接响应、真实时间冻结及一窗条件估值。没有原生SDK推理调用；没有独立盲评。来源为今日取得的当前版本，严格日历/类别/时点及执行费率证据不足；工程完成不等于策略通过。12个月95%扣费不亏和90%严格超同期全国CPI的单侧95%下限均未验收，项目未完成。无正式部署、前瞻任务、交易或开发续跑创建。
