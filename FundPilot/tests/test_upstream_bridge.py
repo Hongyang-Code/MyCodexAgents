@@ -284,3 +284,38 @@ class AtomicBridgeBudgetTests(unittest.TestCase):
             self.assertEqual(result['bridge_responses'],3)
             self.assertEqual((root/'preserved-original-budget.sqlite').read_bytes(),ledger_raw)
             for name,raw in original.items():self.assertEqual((root/'preserved-original-graph'/name).read_bytes(),raw)
+
+@unittest.skipUnless(os.environ.get('FUND_PILOT_UPSTREAM') and importlib.util.find_spec('langgraph'),
+                     'actual pinned native book and graph required')
+class NativeComparisonWiringTests(unittest.TestCase):
+    def test_full_native_flow_and_minimal_analyst_call_floor(self):
+        from fundpilot.comparison_wiring import tradingagents_native
+        for analysts,expected in [(('market','social','news','fundamentals'),12),(('news',),9)]:
+            r=tradingagents_native(os.environ['FUND_PILOT_UPSTREAM'],analysts,synthetic_assets=50 if len(analysts)==1 else 3)
+            if len(analysts)==1:self.assertIn('900049',r['calls'][-1]['prompt'])
+            self.assertEqual(r['fixture_model_requests'],expected)
+            self.assertEqual(r['network_attempts'],[])
+            self.assertEqual(r['research_debate_turns'],2);self.assertEqual(r['risk_debate_turns'],3)
+
+    def test_upstream_full_book_render_and_native_recovery_signature(self):
+        from types import SimpleNamespace
+        from fundpilot.ledger import Ledger
+        from fundpilot.portfolio import PortfolioManager
+        from fundpilot.comparison_wiring import native_portfolio_view
+        from tradingagents.graph.trading_graph import TradingAgentsGraph
+        proof={'source':'SYNTHETIC full inventory','confidence':{'as_of':'1','positions':'1','cash':'1'}}
+        for count in (10,20,50):
+            ledger=Ledger(':memory:');p=PortfolioManager(ledger)
+            p.import_snapshot('all',{'as_of':'2020-01-01T00:00:00Z','positions':[{'code':f'{i+1:06d}','units':'10'} for i in range(count)]},proof)
+            v=native_portfolio_view(p,'000001',coverage='complete')
+            self.assertEqual(len(v['native'].positions),count);self.assertIsNone(v['native'].cash)
+            self.assertIn(f'{count:06d}',v['context']);self.assertNotIn('Cash available: 0',v['context'])
+            wrapper=SimpleNamespace(config={'max_debate_rounds':1,'max_risk_discuss_rounds':1},selected_analysts=['news'])
+            old=TradingAgentsGraph._run_signature(wrapper,'fund',v['native'])
+            v['native'].positions[-1].quantity=11
+            self.assertNotEqual(old,TradingAgentsGraph._run_signature(wrapper,'fund',v['native']))
+            p.submit_trade('synthetic-frozen','sell','000002',units='1',evidence=proof)
+            frozen=native_portfolio_view(p,'000001',coverage='complete')
+            self.assertNotEqual(old,TradingAgentsGraph._run_signature(wrapper,'fund',frozen['native']))
+            with self.assertRaises(ValueError):native_portfolio_view(p,'000001',coverage='partial',unresolved=[{'id':'SYNTHETIC_UNKNOWN','units':None}])
+            ledger.close()

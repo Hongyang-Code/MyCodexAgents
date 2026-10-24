@@ -115,7 +115,7 @@ PYTHONPATH=FundPilot /private/venv/bin/python -m fundpilot.upstream_bridge resum
   --upstream /private/pinned-tradingagents
 ```
 
-start的证据包含fund、information_cutoff、market_report、fundamentals_report字符串，可含context和news_report；本轮只允许一基金。响应含producer、model_ref、generated_at、prompt_sha256、content。generated_at是实际带时区生成时间，不倒填到历史。生成完毕后保存result.json、输入原字节及receipt。所有请求、响应和SQLite检查点均属私有研究材料。检查点恢复已测同云主机不同进程，尚未验收跨机器或定时恢复。
+start的证据包含fund、information_cutoff、market_report、fundamentals_report字符串，可含context和news_report；该API仍按一个目标标的生成研究请求；该字段不限制完整组合资产数，不能把逐标的评级相加冒充全局组合优化。单批新增精读限制与全量组合/账本/风险评估分开。响应含producer、model_ref、generated_at、prompt_sha256、content。generated_at是实际带时区生成时间，不倒填到历史。生成完毕后保存result.json、输入原字节及receipt。所有请求、响应和SQLite检查点均属私有研究材料。检查点恢复已测同云主机不同进程，尚未验收跨机器或定时恢复。
 
 调用前检查上游git SHA、已跟踪文件洁净状态与导入路径。设置LANGCHAIN_TRACING_V2和LANGSMITH_TRACING为false，不创建模型客户端、不读取认证文件、不启动服务器。目录和文件使用0700/0600；这些权限和哈希不等于远程不可篡改存储或完整安全沙箱。传入的私有父目录与存储权限须由调用方核实。
 

@@ -96,6 +96,42 @@ class PortfolioManager:
                     state["cash"] += Decimal(p["amount"])
         return state
 
+    def research_book(self, *, coverage, unresolved=()):
+        """Full non-mutating accounting view; research batch size never truncates it.
+
+        coverage is an externally reviewed inventory declaration, not proof.
+        Unknown identities stay outside confirmed ledger positions, with their
+        original fields retained; no NAV, weights or risk exposure are inferred.
+        """
+        if coverage not in ('complete','partial','unknown'):
+            raise ValueError('explicit inventory coverage required')
+        unknown=list(unresolved)
+        if any(not isinstance(x,dict) or not isinstance(x.get('id'),str) or not x['id'].strip() for x in unknown):
+            raise ValueError('opaque identity required for each unresolved holding')
+        if len({x['id'] for x in unknown})!=len(unknown):raise ValueError('duplicate unresolved identity')
+        state=self.state()
+        if coverage=='complete' and (unknown or state['snapshot_as_of'] is None):
+            raise ValueError('complete inventory cannot omit unresolved holdings or snapshot')
+        snapshots=[e['payload']['snapshot'] for e in self.ledger.events() if e['kind']=='portfolio.snapshot']
+        reserved_cash=sum((Decimal(x['amount']) for x in state['pending'].values() if x['side']=='buy'),Decimal(0))
+        frozen={}
+        for x in state['pending'].values():
+            if x['side']=='sell':frozen[x['code']]=frozen.get(x['code'],Decimal(0))+Decimal(x['units'])
+        result={'inventory_coverage':coverage,'snapshot_as_of':state['snapshot_as_of'],
+                'ledger_version':state['version'],
+                'confirmed_positions':{k:str(v) for k,v in state['positions'].items()},
+                'unresolved_positions':unknown,
+                'available_cash':None if state['cash'] is None else str(state['cash']),
+                'buy_cash_reserved':str(reserved_cash),
+                'sell_units_frozen':{k:str(v) for k,v in frozen.items()},
+                'redemption_receivables':{k:str(v) for k,v in state['receivables'].items()},
+                'pending_applications':list(state['pending'].values()),
+                'original_position_evidence':snapshots[-1]['positions'] if snapshots else [],
+                'lot_evidence_complete':'unknown','weights':None,'risk_exposure':None,
+                'not_an_optimizer':True,'real_guidance_authorized':False}
+        canonical(result)
+        return result
+
     def _record(self, event_id, kind, payload, validate, expected_version=None, occurred_at=None):
         old = self.ledger.get(event_id)
         if old:
