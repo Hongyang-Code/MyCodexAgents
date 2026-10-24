@@ -161,3 +161,34 @@ class PortfolioTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.cancel_trade("b", evidence=PROOF, reason="requested only", outcome="requested")
         self.assertEqual(self.manager.state()["cash"], Decimal(20))
+
+class CompleteResearchBookTests(unittest.TestCase):
+    def test_full_inventory_capacity_and_unsettled_cash_never_truncated(self):
+        for count in (10,20,50):
+            with self.subTest(count=count):
+                ledger=Ledger(':memory:');p=PortfolioManager(ledger)
+                positions=[{'code':f'{i+1:06d}','units':'100','lots':[{'units':'100','confirmed_date':None}]} for i in range(count)]
+                p.import_snapshot('synthetic-full',{'as_of':'2020-01-01T00:00:00Z','cash':'100','positions':positions},PROOF)
+                p.submit_trade('buy','buy','000001',amount='20',evidence=PROOF)
+                p.submit_trade('sell-frozen','sell','000002',units='10',evidence=PROOF)
+                p.submit_trade('sell-receivable','sell','000003',units='10',evidence=PROOF)
+                p.confirm_trade('sell-receivable',units='10',net_cash='9',evidence=PROOF)
+                before=ledger.version;b=p.research_book(coverage='complete')
+                self.assertEqual(len(b['confirmed_positions']),count)
+                self.assertEqual(b['confirmed_positions']['000003'],'90')
+                self.assertEqual(b['available_cash'],'80');self.assertEqual(b['buy_cash_reserved'],'20')
+                self.assertEqual(b['sell_units_frozen'],{'000002':'10'})
+                self.assertEqual(b['redemption_receivables'],{'sell-receivable':'9'})
+                self.assertEqual(len(b['original_position_evidence']),count)
+                self.assertIsNone(b['original_position_evidence'][-1]['lots'][0]['confirmed_date'])
+                self.assertIsNone(b['weights']);self.assertIsNone(b['risk_exposure'])
+                self.assertEqual(ledger.version,before);ledger.close()
+
+    def test_partial_unknown_is_retained_not_zero_or_a_full_replacement(self):
+        ledger=Ledger(':memory:');p=PortfolioManager(ledger)
+        p.import_snapshot('known',{'as_of':'2020-01-01T00:00:00Z','positions':[{'code':'000001','units':'10'}]},PROOF)
+        b=p.research_book(coverage='partial',unresolved=[{'id':'SYNTHETIC_UNRESOLVED','code':None,'weight':None}])
+        self.assertIsNone(b['available_cash']);self.assertEqual(len(b['unresolved_positions']),1)
+        self.assertIsNone(b['unresolved_positions'][0]['weight'])
+        with self.assertRaises(ValueError):p.research_book(coverage='complete',unresolved=b['unresolved_positions'])
+        self.assertEqual(p.state()['positions'],{'000001':Decimal('10')});ledger.close()
