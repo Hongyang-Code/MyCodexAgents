@@ -115,7 +115,7 @@ class DurableBudget:
 
     def reserve(self,operation_id,kind,*,parent=None,failure=None,payload=None):
         if not isinstance(operation_id,str) or not operation_id.strip():raise ValueError('operation ID required')
-        if kind not in (*LIMITS,'candidate','evaluation','checkpoint_resume','comparison_arm'):raise ValueError('unsupported operation')
+        if kind not in (*LIMITS,'candidate','evaluation','checkpoint_resume','comparison_arm','diagnostic_evaluation'):raise ValueError('unsupported operation')
         ph=hashlib.sha256(encoded(payload).encode()).hexdigest()
         with self.connection() as c:
             c.execute('BEGIN IMMEDIATE');d=self._read(c)
@@ -127,6 +127,9 @@ class DurableBudget:
                     raise ValueError('operation ID reused with different arguments')
                 return 'already_reserved_do_not_execute'
             count=lambda k:sum(o['kind']==k for o in ops)
+            grant=d['seed'].get('diagnostic_grant')
+            if grant and kind not in ('prediction_batch','comparison_arm','llm','checkpoint_resume','diagnostic_evaluation'):
+                return 'skip_partial'
             used=d['seed']['used']
             allowed=True
             if kind in LIMITS:
@@ -154,6 +157,9 @@ class DurableBudget:
                 allowed=(any(o['id']==parent and o['kind']=='prediction_batch' for o in ops)
                          and not any(o['kind']=='comparison_arm' and o['parent']==parent for o in ops)
                          and used['llm'] is not None and used['llm']+count('llm')<=3)
+            if kind=='diagnostic_evaluation':
+                allowed=(bool(grant) and count('llm')==12 and count('checkpoint_resume')==12
+                         and count('diagnostic_evaluation')==0 and any(o['id']==parent and o['kind']=='prediction_batch' for o in ops))
             if kind=='checkpoint_resume':
                 allowed=any(o['id']==parent and o['kind']=='llm' for o in ops)
             if not allowed:return 'skip_partial'

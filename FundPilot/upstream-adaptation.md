@@ -252,3 +252,9 @@ PYTHONPATH=FundPilot /private/ta-venv/bin/python -m fundpilot.upstream_bridge re
 第二条依次用于九份实际回答。`--comparison-root`要求原稳定结果与已完成检查点、三份历史请求/响应、输入原字节和权威账本身份一致；不允许借另一个账本开始对照。新增`comparison_arm`操作是原批次的唯一伴随执行权，不增加prediction_batch、模型、来源或候选配额，仍逐次原子占用同一个12请求总额。要求至少留足九请求，失败或中断不退款、不自动重放；13进程竞争同一父批次最多一个伴随臂获准。它不是策略候选或收益评价授权。
 
 诊断允许稳定3对原生9，报告各自成本及资源混杂，不要求同调用数，也不据此声称严格等资源的结构因果。若真实账本`llm`或`prediction_batch`为null，现有require_known会在创建图/发布请求前拒绝；账户token不可见与该操作检查分开。不能用新run_id、合成零种子或更换路径解除。需完整且有据的旧计数，或另经明确批准、保留旧unknown累计的一次受限批次迁移；当前没有自动额度迁移命令。FinRobot基金数据契约阻塞继续保留，不伪造财报凑第三臂。
+
+## 明确批准的一次独立诊断额度
+
+`python -m fundpilot.diagnostic_grant --legacy /private/authority/legacy.sqlite --approval /private/authority/approval.json`只用于有明确人类批准的单次诊断。approval须保存原问答、批准实际时点、出处、唯一approval_id、authority_legacy_path、旧账本SHA256及全部冻结文件路径/哈希；scope严格为llm=12、source=0、evaluations=1、candidate=0。真实批准与这些文件均私有，不复制示例当授权。
+
+权威registry固定在原账本父目录，派生scope账本名由批准ID确定；同一批准只能创建一次。重复执行返回同一已消耗账本，pending/崩溃或缺失账本拒绝重发；复制至其他目录与原批准的canonical路径不一致而拒绝。保留原账本字节、完整候选历史和累计unknown，新scope已用0仅表示该次授权尚未用量，不代表旧用量或token=0。候选、来源和重试操作在此scope禁用；一次diagnostic_evaluation仅在12份请求与12次响应消费完成后允许，仍无融合或投资晋级。注册表/同一账本要求唯一云执行者和可靠本地锁，不提供跨机器多副本互斥、密码学身份签名或隐藏token计量。approval真实性由宿主核实，工具不能替人批准。

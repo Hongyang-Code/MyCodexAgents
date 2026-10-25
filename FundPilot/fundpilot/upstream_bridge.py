@@ -294,6 +294,8 @@ def start(evidence_path, output, upstream, *, budget=None, operation_id=None, gr
     ledger=DurableBudget(budget)
     ledger.require_known('prediction_batch','llm')
     raw = read_private(evidence_path); e = json.loads(raw)
+    from .diagnostic_grant import verify_bindings
+    verify_bindings(ledger.snapshot()['seed'],evidence_path=evidence_path,input_sha256=digest(raw))
     for k in ('fund', 'information_cutoff', 'market_report', 'fundamentals_report'):
         if not isinstance(e.get(k), str) or not e[k].strip(): raise ValueError('missing '+k)
     if graph_mode=='native_news' and (not isinstance(e.get('portfolio_context'),str) or not e['portfolio_context'].strip()):
@@ -407,6 +409,8 @@ def resume(root, response_path, upstream):
         if not binding:raise ValueError('legacy graph has no shared budget; no automatic migration')
         ledger=DurableBudget(binding['path'])
         seed=ledger.snapshot()['seed']
+        from .diagnostic_grant import verify_bindings
+        verify_bindings(seed,input_sha256=json.loads(read_private(root/'receipt.json'))['input_sha256'])
         if (seed['run_id'],seed['ledger_id'])!=(binding['run_id'],binding['ledger_id']):
             raise ValueError('budget identity mismatch')
         ledger.require(binding['operation_id']+f'/response/{n}','checkpoint_resume',
