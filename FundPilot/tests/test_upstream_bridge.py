@@ -319,3 +319,83 @@ class NativeComparisonWiringTests(unittest.TestCase):
             self.assertNotEqual(old,TradingAgentsGraph._run_signature(wrapper,'fund',frozen['native']))
             with self.assertRaises(ValueError):native_portfolio_view(p,'000001',coverage='partial',unresolved=[{'id':'SYNTHETIC_UNKNOWN','units':None}])
             ledger.close()
+
+@unittest.skipUnless(os.environ.get('FUND_PILOT_UPSTREAM') and importlib.util.find_spec('langgraph'),
+                     'actual pinned native graph required; no live inference')
+class NativeHostBoundaryTests(unittest.TestCase):
+    def command(self,*args):
+        return subprocess.run([sys.executable,'-m','fundpilot.upstream_bridge',*map(str,args),
+            '--upstream',os.environ['FUND_PILOT_UPSTREAM']],check=True,capture_output=True,text=True)
+
+    def evidence(self,root):
+        p=root/'evidence.json';book='SYNTHETIC full observation book: '+','.join(f'{900000+i}:unknown' for i in range(50))
+        write_new(p,{'fund':'SYNTHETIC_BASKET','information_cutoff':'2020-01-01',
+            'market_report':'SYNTHETIC source M1, historical only','fundamentals_report':'unknown',
+            'portfolio_context':book,'context':book})
+        return p
+
+    def answer(self,root,graph,n):
+        from fundpilot.upstream_bridge import now
+        q=json.loads((graph/f'request-{n}.json').read_bytes());p=root/f'{graph.name}-answer-{n}.json'
+        write_new(p,{'producer':'synthetic_fixture','model_ref':'SYNTHETIC_NOT_REAL_LLM',
+            'prompt_sha256':q['prompt_sha256'],'generated_at':now(),'content':f'Hold\nSYNTHETIC unique answer {graph.name} {n}; unknown'})
+        return p
+
+    def test_shared_three_plus_nine_cross_process_closed_restore_and_replay(self):
+        """One batch, exactly 12 charged requests, no candidate; all stages native."""
+        from fundpilot.upstream_bridge import resume
+        from fundpilot.native_host import ROLES
+        import shutil
+        with tempfile.TemporaryDirectory() as td:
+            r=Path(td);e=self.evidence(r);b=synthetic_budget(r);stable=r/'stable';native=r/'native'
+            self.command('start','--evidence',e,'--output',stable,'--budget',b,'--operation-id','stable')
+            for n in range(1,4):self.command('resume','--root',stable,'--response',self.answer(r,stable,n))
+            self.command('start','--graph-mode','native_news','--comparison-root',stable,
+                '--evidence',e,'--output',native,'--budget',b,'--operation-id','native')
+            # Close processes, preserve original bytes, restore at canonical paths.
+            preserved=r/'preserved';preserved.mkdir(mode=0o700)
+            shutil.copytree(native,preserved/'native');shutil.copy2(b,preserved/'budget.sqlite')
+            original_budget=b.read_bytes()
+            shutil.rmtree(native);shutil.copytree(preserved/'native',native)
+            b.unlink();shutil.copy2(preserved/'budget.sqlite',b)
+            for n,role in enumerate(ROLES,1):
+                q=json.loads((native/f'request-{n}.json').read_bytes())
+                self.assertEqual(q['role'],role);self.assertIn('900049',q['prompt'])
+                self.assertIn('native_prompt_sha256',q)
+                a=self.answer(r,native,n)
+                if n==2:
+                    prior=native/'response-1.json';original=prior.read_bytes()
+                    o=json.loads(original);o['model_ref']='TAMPER';prior.write_text(json.dumps(o))
+                    with self.assertRaisesRegex(ValueError,'response chain'):resume(native,a,os.environ['FUND_PILOT_UPSTREAM'])
+                    self.assertFalse((native/'response-2.json').exists());prior.write_bytes(original)
+                self.command('resume','--root',native,'--response',a)
+            result=json.loads((native/'result.json').read_bytes())
+            self.assertEqual(result['bridge_responses'],9)
+            self.assertEqual(result['response_producers'],['synthetic_fixture']*9)
+            self.assertEqual(result['research_state']['risk_debate_state']['count'],3)
+            self.assertEqual(result['research_state']['investment_debate_state']['count'],2)
+            self.assertFalse(result['native_upstream_llm_api_called'])
+            ops=DurableBudget(b).snapshot()['operations']
+            self.assertEqual(sum(o['kind']=='llm' for o in ops),12)
+            self.assertEqual(sum(o['kind']=='prediction_batch' for o in ops),1)
+            self.assertEqual(sum(o['kind']=='comparison_arm' for o in ops),1)
+            self.assertFalse(any(o['kind']=='candidate' for o in ops))
+            self.assertEqual(DurableBudget(b).reserve('thirteenth','llm'),'skip_partial')
+            self.assertEqual((preserved/'budget.sqlite').read_bytes(),original_budget)
+            with self.assertRaises(subprocess.CalledProcessError):self.command('resume','--root',native,'--response',a)
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.command('start','--graph-mode','native_news','--comparison-root',stable,
+                    '--evidence',e,'--output',r/'again','--budget',b,'--operation-id','again')
+            self.assertFalse((r/'again').exists())
+
+    def test_native_unknown_usage_and_missing_book_fail_before_request_publication(self):
+        from fundpilot.upstream_bridge import start
+        with tempfile.TemporaryDirectory() as td:
+            r=Path(td);e=self.evidence(r);b=r/'unknown.sqlite';u=os.environ['FUND_PILOT_UPSTREAM']
+            DurableBudget.create(b,run_id='synthetic-unknown',used=dict(source=None,retry=None,llm=None,prediction_batch=None),candidate_history=None)
+            original=b.read_bytes()
+            with self.assertRaisesRegex(ValueError,'unknown'):start(e,r/'absent',u,budget=b,operation_id='blocked',graph_mode='native_news')
+            self.assertEqual(b.read_bytes(),original);self.assertFalse((r/'absent').exists())
+            good=synthetic_budget(r);o=json.loads(e.read_bytes());del o['portfolio_context'];e.write_text(json.dumps(o))
+            with self.assertRaisesRegex(ValueError,'observation book'):start(e,r/'absent',u,budget=good,operation_id='blocked',graph_mode='native_news')
+            self.assertEqual(DurableBudget(good).snapshot()['operations'],[])

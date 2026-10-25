@@ -115,7 +115,7 @@ class DurableBudget:
 
     def reserve(self,operation_id,kind,*,parent=None,failure=None,payload=None):
         if not isinstance(operation_id,str) or not operation_id.strip():raise ValueError('operation ID required')
-        if kind not in (*LIMITS,'candidate','evaluation','checkpoint_resume'):raise ValueError('unsupported operation')
+        if kind not in (*LIMITS,'candidate','evaluation','checkpoint_resume','comparison_arm'):raise ValueError('unsupported operation')
         ph=hashlib.sha256(encoded(payload).encode()).hexdigest()
         with self.connection() as c:
             c.execute('BEGIN IMMEDIATE');d=self._read(c)
@@ -150,6 +150,10 @@ class DurableBudget:
             if kind=='evaluation':
                 allowed=(any(o['id']==parent and o['kind']=='candidate' for o in ops)
                          and not any(o['kind']=='evaluation' and o['parent']==parent for o in ops))
+            if kind=='comparison_arm':
+                allowed=(any(o['id']==parent and o['kind']=='prediction_batch' for o in ops)
+                         and not any(o['kind']=='comparison_arm' and o['parent']==parent for o in ops)
+                         and used['llm'] is not None and used['llm']+count('llm')<=3)
             if kind=='checkpoint_resume':
                 allowed=any(o['id']==parent and o['kind']=='llm' for o in ops)
             if not allowed:return 'skip_partial'

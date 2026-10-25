@@ -227,3 +227,28 @@ start保存input.json原字节、receipt和图检查点；每份request、respon
 ```
 
 freeze的receipt与验收输出各自私有保存；验收工具不会从图结果推导净收益/CPI、签认独立性或自动准许现实指导。输入schema见对应文档，不将synthetic_fixture改名为真实证据。
+
+## 原生单分析师九节点的宿主桥接
+
+`upstream_bridge start --graph-mode native_news`复用固定上游GraphSetup及原生news、bull、bear、research manager、Trader、三风险节点与Portfolio Manager，共九次文本响应。原提示及其哈希单独保存；传输层加基金历史模拟边界，不用新角色提示冒充上游。保留原路由与SQLite检查点。结构化生成明确禁用，不隐藏重试；stock工具不执行，只使用冻结的共享证据，进程内网络连接被拒绝。这是闭合证据对照配置，不能冒称上游完整产品、实时工具或原生SDK推理。
+
+真实材料仍由宿主实际读取request并生成响应；producer、model_ref、generated_at与prompt_sha256格式沿用前述模板。模型精确版本未知须明确unknown，不把合成响应改名。九次resume每次可在新进程执行；请求原捕获时间在重放时复用。input、receipt、各历史中断、当前中断及累计响应字节哈希与检查点元数据相互核对。输出的LangChain消息以其原生字典格式保存。全部路径、权限、重复执行和不确定崩溃的拒绝规则沿用稳定入口。
+
+同一私有evidence.json除原字段外须有`portfolio_context`：完整非个性化观察组合及覆盖/日期、份额、现金、冻结、应收、批次和unknown。它必须原样包含在`context`中，使稳定三节点也看到相同组合；不截取前三只、不据名称推断暴露。观察例不等于用户持仓，固定观察池覆盖限制不得当作完整个人组合检验。
+
+在**已经核对操作计数与本次授权**的同一账本中，先完成稳定三响应，然后启动唯一原生对照臂：
+
+```bash
+PYTHONPATH=FundPilot /private/ta-venv/bin/python -m fundpilot.upstream_bridge start \
+  --evidence /private/research/evidence.json --output /private/research/new-native \
+  --upstream /private/tradingagents --budget /private/research/budget.sqlite \
+  --operation-id stable-comparison-native --graph-mode native_news \
+  --comparison-root /private/research/completed-stable
+PYTHONPATH=FundPilot /private/ta-venv/bin/python -m fundpilot.upstream_bridge resume \
+  --root /private/research/new-native --response /private/research/actual-answer-1.json \
+  --upstream /private/tradingagents
+```
+
+第二条依次用于九份实际回答。`--comparison-root`要求原稳定结果与已完成检查点、三份历史请求/响应、输入原字节和权威账本身份一致；不允许借另一个账本开始对照。新增`comparison_arm`操作是原批次的唯一伴随执行权，不增加prediction_batch、模型、来源或候选配额，仍逐次原子占用同一个12请求总额。要求至少留足九请求，失败或中断不退款、不自动重放；13进程竞争同一父批次最多一个伴随臂获准。它不是策略候选或收益评价授权。
+
+诊断允许稳定3对原生9，报告各自成本及资源混杂，不要求同调用数，也不据此声称严格等资源的结构因果。若真实账本`llm`或`prediction_batch`为null，现有require_known会在创建图/发布请求前拒绝；账户token不可见与该操作检查分开。不能用新run_id、合成零种子或更换路径解除。需完整且有据的旧计数，或另经明确批准、保留旧unknown累计的一次受限批次迁移；当前没有自动额度迁移命令。FinRobot基金数据契约阻塞继续保留，不伪造财报凑第三臂。

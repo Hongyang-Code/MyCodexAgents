@@ -20,7 +20,7 @@ import stat
 PIN = 'e8f5503e9b86d5c2710b0c76b1f686703968c9df'
 SCOPE = {'retrospective': True, 'reused_development': True, 'independent_oos': False,
          'llm_memory_contamination_possible': True, 'trading_authorized': False,
-         'native_upstream_llm_api_called': False}
+         'native_upstream_llm_api_called': False, 'real_guidance_authorized': False, 'project_complete': False}
 
 
 def digest(raw):
@@ -215,14 +215,21 @@ def opened(root, upstream):
         old_mask = os.umask(0o077)
         try:
             with closing(sqlite3.connect(f'/proc/self/fd/{parent}/{name}', check_same_thread=False)) as conn:
-                yield build_graph(SqliteSaver(conn), root)
+                receipt=json.loads(read_private(root/'receipt.json'))
+                if receipt.get('graph_mode') == 'native_news':
+                    from .native_host import build_native_graph
+                    from .comparison_wiring import network_denied
+                    with network_denied([]):
+                        yield build_native_graph(SqliteSaver(conn), root)
+                else:
+                    yield build_graph(SqliteSaver(conn), root)
         finally:
             os.umask(old_mask)
     private_root(root)
 
 
 def config(root=None):
-    result = {'configurable': {'thread_id': 'single-fund-research'}, 'recursion_limit': 10}
+    result = {'configurable': {'thread_id': 'single-fund-research'}, 'recursion_limit': 40}
     if root is not None:
         raw = read_private(Path(root)/'receipt.json'); receipt = json.loads(raw)
         if receipt.get('bridge_schema') != 2: raise ValueError('v2 receipt required; no implicit legacy migration')
@@ -242,6 +249,13 @@ def verify_inputs(root, snapshot):
               'fundamentals_report':e['fundamentals_report'], 'news_report':e.get('news_report',''),
               'trade_date':e['information_cutoff'][:10], 'asset_type':'fund', 'sentiment_report':'',
               'instrument_context':e['fund']+'; watchlist only, holdings unknown. '+e.get('context','')}
+    if receipt.get('graph_mode') == 'native_news':
+        fields.pop('news_report')
+        fields['instrument_context']=native_context(e)
+        fields['portfolio_context']=e['portfolio_context']
+        responses=[digest(read_private(p)) for p in sorted(root.glob('response-*.json'))]
+        if snapshot.metadata.get('fundpilot_responses_sha256', digest(b'[]')) != digest(json.dumps(responses).encode()):
+            raise ValueError('native response chain differs from checkpoint metadata')
     if any(snapshot.values.get(k) != v for k,v in fields.items()):
         raise ValueError('checkpoint input evidence differs from saved original')
 
@@ -258,6 +272,9 @@ def record_result(root, result, sequence, graph):
         write_new(Path(root)/f'request-{sequence}.json', {**interrupts[0].value,
                   'checkpoint_id':graph.get_state(config()).config['configurable']['checkpoint_id']})
         return {'status':'awaiting_current_llm', 'request':str(Path(root)/f'request-{sequence}.json')}
+    if json.loads(read_private(Path(root)/'receipt.json')).get('graph_mode')=='native_news':
+        from langchain_core.messages import messages_to_dict
+        result={**result,'messages':messages_to_dict(result.get('messages',[]))}
     write_new(Path(root)/'result.json', {**SCOPE, 'upstream_sha':PIN, 'completed_at':now(),
               'bridge_responses':sequence-1,
               'response_producers':[json.loads(read_private(p))['producer'] for p in sorted(Path(root).glob('response-*.json'))],
@@ -265,25 +282,64 @@ def record_result(root, result, sequence, graph):
     return {'status':'completed_research_graph', **SCOPE}
 
 
-def start(evidence_path, output, upstream, *, budget=None, operation_id=None):
+def native_context(e):
+    return (e['fund']+'; historical nonpersonal observation basket; not user holdings. '+e.get('context','')
+            +'\nFROZEN SHARED EVIDENCE:\n'+e['market_report']+'\n'+e['fundamentals_report']+'\n'+e.get('news_report','')+'\nFULL OBSERVATION BOOK:\n'+e['portfolio_context'])
+
+
+def start(evidence_path, output, upstream, *, budget=None, operation_id=None, graph_mode='stable', comparison_root=None):
     from .durable_budget import DurableBudget
     if budget is None or not operation_id:raise ValueError('shared budget and stable operation ID required')
+    if graph_mode not in ('stable','native_news'):raise ValueError('unsupported graph mode')
     ledger=DurableBudget(budget)
     ledger.require_known('prediction_batch','llm')
     raw = read_private(evidence_path); e = json.loads(raw)
     for k in ('fund', 'information_cutoff', 'market_report', 'fundamentals_report'):
         if not isinstance(e.get(k), str) or not e[k].strip(): raise ValueError('missing '+k)
+    if graph_mode=='native_news' and (not isinstance(e.get('portfolio_context'),str) or not e['portfolio_context'].strip()):
+        raise ValueError('explicit full observation book/coverage/unknown context required')
     if '..' in Path(output).parts: raise ValueError('parent traversal rejected')
     out = Path(os.path.abspath(output))
     with private_parent(out):pass
-    ledger.require(operation_id,'prediction_batch',payload={'input_sha256':digest(raw),'root':str(out)})
+    if comparison_root is not None and e.get('portfolio_context','') not in e.get('context',''):
+        raise ValueError('same complete observation book must be visible to stable context')
+    if comparison_root is None:
+        ledger.require(operation_id,'prediction_batch',payload={'input_sha256':digest(raw),'root':str(out)})
+    else:
+        if graph_mode!='native_news':raise ValueError('only one native companion to completed stable arm allowed')
+        stable=private_root(comparison_root)
+        original=read_private(stable/'input.json');rec=json.loads(read_private(stable/'receipt.json'))
+        completed=json.loads(read_private(stable/'result.json'))
+        binding=rec['budget'];seed=ledger.snapshot()['seed']
+        if (original!=raw or digest(original)!=rec['input_sha256'] or rec.get('graph_mode','stable')!='stable' or
+            binding['path']!=str(ledger.path) or binding['ledger_id']!=seed['ledger_id'] or binding['run_id']!=seed['run_id'] or
+            completed.get('bridge_responses')!=3 or len(completed.get('response_producers',[]))!=3):
+            raise ValueError('comparison requires same completed stable input and authoritative ledger')
+        # Reuse checkpoint validation, including original request/response evidence.
+        with opened(stable,upstream) as stable_graph:
+            snap=stable_graph.get_state(config())
+            verify_inputs(stable,snap)
+            if snap.tasks or completed.get('research_state')!=snap.values:raise ValueError('stable result differs from completed checkpoint')
+            for i in range(1,4):
+                answer=json.loads(read_private(stable/f'response-{i}.json'))
+                q=json.loads(read_private(stable/f'request-{i}.json')); checkpoint=q.pop('checkpoint_id')
+                old=stable_graph.get_state({'configurable':{'thread_id':'single-fund-research','checkpoint_id':checkpoint}})
+                pending=[v.value for t in old.tasks for v in t.interrupts]
+                if pending!=[q] or answer['prompt_sha256']!=q['prompt_sha256']:raise ValueError('stable historical request mismatch')
+                if not checked_time(q['captured_at'])<=checked_time(answer['generated_at'])<=datetime.now(timezone.utc):raise ValueError('stable response time mismatch')
+                if answer['producer']!=completed['response_producers'][i-1]:raise ValueError('stable producer mismatch')
+                value=snap.values['investment_debate_state'].get(('bull_history','bear_history')[i-1]) if i<3 else snap.values.get('investment_plan')
+                expected='\n'+('Bull','Bear')[i-1]+' Analyst: '+answer['content'] if i<3 else answer['content']
+                if value!=expected:raise ValueError('stable response differs from completed checkpoint')
+        ledger.require(operation_id,'comparison_arm',parent=binding['operation_id'],
+            payload={'input_sha256':digest(raw),'root':str(out),'stable_root':str(stable)})
     with private_parent(out) as (parent, name): os.mkdir(name, mode=0o700, dir_fd=parent)
     write_bytes_new(out/'input.json', raw)
     write_new(out/'receipt.json', {'actual_started_at':now(), 'input_sha256':digest(raw),
-              'upstream_sha':PIN, 'bridge_schema':2,
+              'upstream_sha':PIN, 'bridge_schema':2, 'graph_mode':graph_mode,
               'budget':{'path':str(ledger.path),'run_id':ledger.snapshot()['seed']['run_id'],
                         'ledger_id':ledger.snapshot()['seed']['ledger_id'],'operation_id':operation_id},
-              'max_responses':3, 'api_usage':'unknown', **SCOPE})
+              'max_responses':9 if graph_mode=='native_news' else 3, 'api_usage':'unknown', **SCOPE})
     state = {'messages':[], 'company_of_interest':e['fund'], 'asset_type':'fund',
              'instrument_context':e['fund']+'; watchlist only, holdings unknown. '+e.get('context',''),
              'trade_date':e['information_cutoff'][:10],
@@ -291,6 +347,11 @@ def start(evidence_path, output, upstream, *, budget=None, operation_id=None):
              'news_report':e.get('news_report',''), 'sentiment_report':'',
              'investment_debate_state':{'history':'', 'bull_history':'', 'bear_history':'',
                                         'current_response':'', 'count':0}}
+    if graph_mode=='native_news':
+        from tradingagents.graph.propagation import Propagator
+        state=Propagator().create_initial_state(e['fund'],e['information_cutoff'][:10],asset_type='fund',
+            instrument_context=native_context(e),portfolio_context=e['portfolio_context'])
+        state.update(market_report=e['market_report'],fundamentals_report=e['fundamentals_report'])
     with opened(out, upstream) as graph:
         return record_result(out, graph.invoke(state, config(out)), 1, graph)
 
@@ -310,7 +371,9 @@ def resume(root, response_path, upstream):
         if len(active)!=1: raise ValueError('exactly one pending upstream node required')
         requests = sorted(root.glob('request-*.json'))
         n = len(requests)
-        if not 1 <= n <= 3 or [p.name for p in requests] != [f'request-{i}.json' for i in range(1,n+1)]:
+        native=json.loads(read_private(root/'receipt.json')).get('graph_mode')=='native_news'
+        maximum=9 if native else 3
+        if not 1 <= n <= maximum or [p.name for p in requests] != [f'request-{i}.json' for i in range(1,n+1)]:
             raise ValueError('request sequence missing or budget exhausted')
         for index, path in enumerate(requests, 1):
             historical = json.loads(read_private(path)); old_id = historical.pop('checkpoint_id')
@@ -326,7 +389,7 @@ def resume(root, response_path, upstream):
                 role = 'bull' if index == 1 else 'bear'
                 label = 'Bull' if index == 1 else 'Bear'
                 expected_history = '\n' + label + ' Analyst: ' + previous['content']
-                if snapshot.values['investment_debate_state'].get(role+'_history') != expected_history:
+                if not native and snapshot.values['investment_debate_state'].get(role+'_history') != expected_history:
                     raise ValueError('prior response differs from checkpoint debate')
         saved = json.loads(read_private(requests[-1]))
         checkpoint_id = saved.pop('checkpoint_id')
@@ -349,7 +412,11 @@ def resume(root, response_path, upstream):
         ledger.require(binding['operation_id']+f'/response/{n}','checkpoint_resume',
             parent=binding['operation_id']+f'/request/{n}',payload={'response_sha256':digest(response_raw)})
         write_new(root/f'response-{n}.json', response)
-        return record_result(root, graph.invoke(Command(resume=response), config(root)), n+1, graph)
+        cfg=config(root)
+        if native:
+            hashes=[digest(read_private(p)) for p in sorted(root.glob('response-*.json'))]
+            cfg['metadata']['fundpilot_responses_sha256']=digest(json.dumps(hashes).encode())
+        return record_result(root, graph.invoke(Command(resume=response), cfg), n+1, graph)
 
 
 def main():
@@ -358,6 +425,8 @@ def main():
     stop=sub.add_parser('budget-stop');stop.add_argument('--budget',required=True);stop.add_argument('--reason',required=True)
     a=sub.add_parser('start'); a.add_argument('--evidence',required=True);a.add_argument('--output',required=True)
     a.add_argument('--budget',required=True);a.add_argument('--operation-id',required=True)
+    a.add_argument('--graph-mode',choices=('stable','native_news'),default='stable')
+    a.add_argument('--comparison-root',help='completed stable arm; same input and shared budget, never new quota')
     b=sub.add_parser('resume');b.add_argument('--root',required=True);b.add_argument('--response',required=True)
     for x in (a,b): x.add_argument('--upstream',required=True)
     a=p.parse_args()
@@ -370,7 +439,7 @@ def main():
         else:
             DurableBudget(a.budget).stop(a.reason);result={'status':'stopped'}
         print(json.dumps(result));return
-    result=start(a.evidence,a.output,a.upstream,budget=a.budget,operation_id=a.operation_id) if a.command=='start' else resume(a.root,a.response,a.upstream)
+    result=start(a.evidence,a.output,a.upstream,budget=a.budget,operation_id=a.operation_id,graph_mode=a.graph_mode,comparison_root=a.comparison_root) if a.command=='start' else resume(a.root,a.response,a.upstream)
     print(json.dumps(result,ensure_ascii=False))
 
 if __name__=='__main__':main()

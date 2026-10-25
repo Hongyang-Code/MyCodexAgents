@@ -1,6 +1,6 @@
 # 上游原生流程与完整组合对照协议
 
-版本 wiring-v1；当前仅冻结离线接线合约，真实效果对照/专项调用与融合候选授权待核实，不因本文件允许执行。稳定定义按提交冻结，旧七天历史与全部失败原样保留。工程跑通不等于模型效果或投资达标。
+版本 wiring-v2；已有闭合证据的真实宿主传输入口，工程测试使用合成响应；真实效果运行须核对权威操作账本，不因本文件初始化新额度。稳定定义按提交冻结，旧七天历史与全部失败原样保留。工程跑通不等于模型效果或投资达标。
 
 ## 单位与冻结输入
 
@@ -30,15 +30,15 @@ PYTHONPATH=FundPilot PYDANTIC_AI_NO_BANNER=1 /private/fr-venv/bin/python -m fund
   --synthetic-fixture --output /private/research/new-fr-wiring.json
 ```
 
-另支持finrobot-ic-native。CLI只暴露synthetic_fixture，封闭缓存和模型替身边界明确替换，实际导入原工厂/图/管线/检验器；不发SDK推理或市场请求。输出有提示/消息哈希、原生阶段、失败、网络尝试、actual_llm_requests=0、effect_comparison_performed=false。股票工具不作为基金真实证据；现有FinRobot锁定安装快照与TradingAgents Linux约束分别使用，均固定Apache 2.0源码，不混装、不读取密钥/桌面账户。
+另支持finrobot-ic-native。comparison_wiring CLI仍只暴露synthetic_fixture；真实宿主路径是upstream_bridge的native_news模式，见上游适配说明。离线探针的封闭缓存和模型替身边界明确替换，实际导入原工厂/图/管线/检验器；不发SDK推理或市场请求。输出有提示/消息哈希、原生阶段、失败、网络尝试、actual_llm_requests=0、effect_comparison_performed=false。股票工具不作为基金真实证据；现有FinRobot锁定安装快照与TradingAgents Linux约束分别使用，均固定Apache 2.0源码，不混装、不读取密钥/桌面账户。
 
 ## 总预算可行性与待审选择
 
 拟议所有方案合计最多12模型请求、12主要来源尝试；失败、审校和允许的重试共用总额，不是每基金或每臂12。尚未把拟议值记成已批准新预算；旧unknown不改0。全三臂默认原生流程仅FundPilot3+TradingAgents12即超总额，FinRobot还未过基金数据门槛，不能称已公平运行。
 
-待审的最小两臂方案是FundPilot3与TradingAgents原生单分析师配置9（总12），但这是明确不等调用数的流程成本对照；不得伪称严格等调用资源的结构因果优势。须先冻结完整组合载体/工具适配和相同模型能力，且用户接受该资源差异。另一候选FinRobot IC名义4调用有望与稳定3装入总额，但当前基金财务前提阻塞，未列为可执行真实效果臂。不能删除上游风险/检验节点来挤预算又称原生完整流程，也不能给FundPilot更多采样后宣称结构好。
+最小两臂诊断方案是FundPilot3与TradingAgents原生单分析师配置9（总12），但这是明确不等调用数的流程成本对照；不得伪称严格等调用资源的结构因果优势。须先冻结完整组合载体/工具适配和相同模型能力，资源差异必须随结果披露，不额外要求同调用数才可做诊断。另一候选FinRobot IC名义4调用有望与稳定3装入总额，但当前基金财务前提阻塞，未列为可执行真实效果臂。不能删除上游风险/检验节点来挤预算又称原生完整流程，也不能给FundPilot更多采样后宣称结构好。
 
-若要求严格等调用上限且完整原生流程，当前总额不足；保持pending，列未测臂及准确原因，向主任务提交具体可审方案，不自行扩额或换run_id。真实模型能力、原生认证或宿主桥接尚须明确；FinRobot原生SIWC支持本批未核实，不推定必须买API或自行取令牌。
+若要求严格等调用上限且完整原生流程，当前总额不足；保持pending，列未测臂及准确原因，向主任务提交具体可审方案，不自行扩额或换run_id。宿主桥接已接通原生九节点；它不登录、不调用SDK，实际模型能力和身份由生成宿主记录；FinRobot原生SIWC支持本批未核实，不推定必须买API或自行取令牌。
 
 ## 唯一固定评价与失败
 
@@ -53,3 +53,5 @@ PYTHONPATH=FundPilot PYDANTIC_AI_NO_BANNER=1 /private/fr-venv/bin/python -m fund
 ## 静态参考与未实现
 
 主任务提供的Qlib EnhancedIndexingOptimizer审阅指出失败回退可能移除换手约束，输出还截断归一化；FinRL StockPortfolioEnv的成本字段不证明step已真实扣费，且无场外确认到账。RD-Agent研究/实现/反馈循环仍未安装执行。本批未实跑这些项目，不声称已复用；不新增RL训练或收费服务。后续若复用优化器，必须按原始全部硬约束后验严格校验，不自动放宽换手/费用/冻结/风险限制，跟踪误差不是最大回撤保证。
+
+当前阻塞须精确记录为实际权威账本的字段、范围及检查结果。未知token不能写成平台拒绝；旧操作用量unknown不能写成0。一次独立批次授权如有必要，须保留旧账本/累计unknown与七天历史，明确新额度作用域、生效时间和总12请求，不自动开放融合候选。

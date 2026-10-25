@@ -151,3 +151,24 @@ except (ValueError,OSError) as e:
             self.assertEqual(b.reserve('one','source'),'reserved')
             self.assertEqual(len(DurableBudget(p).snapshot()['operations']),1)
             self.assertFalse((Path(td)/'budget ').exists())
+
+class CompanionArmBudgetTests(unittest.TestCase):
+    def test_thirteen_competing_companions_do_not_add_batches_or_requests(self):
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/'b.sqlite'
+            b=DurableBudget.create(p,run_id='SYNTHETIC',used=USED,candidate_history=[])
+            b.require('stable','prediction_batch')
+            for i in range(3):b.require(f'stable/request/{i}','llm')
+            code="from fundpilot.durable_budget import DurableBudget;import sys;print(DurableBudget(sys.argv[1]).reserve(sys.argv[2],'comparison_arm',parent='stable'))"
+            ps=[subprocess.Popen([sys.executable,'-c',code,str(p),str(i)],stdout=subprocess.PIPE,text=True) for i in range(13)]
+            statuses=[x.communicate(timeout=30)[0].strip() for x in ps]
+            self.assertEqual(statuses.count('reserved'),1)
+            self.assertEqual(statuses.count('skip_partial'),12)
+            ops=b.snapshot()['operations']
+            self.assertEqual(sum(o['kind']=='prediction_batch' for o in ops),1)
+            self.assertEqual(sum(o['kind']=='llm' for o in ops),3)
+            self.assertEqual(b.reserve('unrelated','comparison_arm',parent='absent'),'skip_partial')
+        with tempfile.TemporaryDirectory() as td:
+            p=Path(td)/'b.sqlite';b=DurableBudget.create(p,run_id='SYNTHETIC',used=dict(USED,llm=4),candidate_history=[])
+            b.require('stable','prediction_batch')
+            self.assertEqual(b.reserve('over-cap','comparison_arm',parent='stable'),'skip_partial')
