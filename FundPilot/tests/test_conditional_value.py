@@ -62,6 +62,18 @@ class ConditionalValueTests(unittest.TestCase):
         with self.assertRaises(ValueError):evaluate(p,d,n,s)
         p,d,n,s=fixture();n=b'\n'.join(n.splitlines()[:-1])+b'\n'
         with self.assertRaisesRegex(ValueError,'missing NAV'):evaluate(p,d,n,s)
+
+    def test_historical_execution_qualification_keeps_scenario_events_pending(self):
+        p,d,n,s=fixture();r=evaluate(p,d,n,s)
+        q=r['historical_execution_qualification']
+        self.assertEqual(q['status'],'pending_historical_execution_evidence')
+        self.assertFalse(q['executable_returns_authorized'])
+        self.assertEqual(q['distribution_event_status'],'pending_scenario_assumption_not_historical_verification')
+        self.assertEqual(q['split_event_status'],'pending_scenario_assumption_not_historical_verification')
+        self.assertEqual(q['funds']['A']['product_amount_rounding_status'],'pending_not_modeled_for_scenario_rate')
+        self.assertEqual(q['funds']['A']['product_share_rounding_status'],'pending_not_modeled_for_scenario_rate')
+        self.assertAlmostEqual(D(r['outcomes']['llm_allocation']['pre_liquidation_nav_mark']['book_equity']),
+                               D('1045.454545454545454545454545'))
     def test_no_direction_conversion_or_leverage(self):
         p,d,n,s=fixture();d['decision_kind']='direction_card'
         with self.assertRaises(ValueError):evaluate(p,d,n,s)
