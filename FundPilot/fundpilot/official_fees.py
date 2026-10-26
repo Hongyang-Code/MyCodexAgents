@@ -11,6 +11,25 @@ import re
 from .risk import FeeBand, FeeSchedule, decimal, nonnegative
 
 
+def validate_redemption_dates(subscription_confirmation, *,
+                              redemption_application=None, redemption_confirmation=None):
+    """Check every known date, even when the selected holding basis is unknown.
+
+    Missing values stay None. Calendar eligibility and actual execution still
+    require product/channel evidence outside this arithmetic validation.
+    """
+    start = None if subscription_confirmation is None else date.fromisoformat(subscription_confirmation)
+    application = None if redemption_application is None else date.fromisoformat(redemption_application)
+    confirmation = None if redemption_confirmation is None else date.fromisoformat(redemption_confirmation)
+    if application is not None and confirmation is not None and application > confirmation:
+        raise ValueError('redemption application follows redemption confirmation')
+    if start is not None and application is not None and application < start:
+        raise ValueError('redemption application precedes subscription confirmation')
+    if start is not None and confirmation is not None and confirmation < start:
+        raise ValueError('redemption confirmation precedes subscription confirmation')
+    return start, application, confirmation
+
+
 class OfficialFees:
     def __init__(self, record, raw_document):
         self.record = record
@@ -95,12 +114,18 @@ class OfficialFees:
         Missing basis/dates returns partial lot evidence and null total fee.
         """
         nav = nonnegative(nav); basis = self.record.get('holding_basis')
-        end = {'confirmation_to_confirmation_exclusive_end':redemption_confirmation,
-               'confirmation_to_application_exclusive_end':redemption_application}.get(basis)
+        # Validate both supplied dates, not only the one used to count days.
+        validate_redemption_dates(None, redemption_application=redemption_application,
+                                  redemption_confirmation=redemption_confirmation)
         rows = []
         for lot in lots:
-            units = nonnegative(lot['units']); start = lot.get('confirmed_on')
-            days = None if start is None or end is None else (date.fromisoformat(end)-date.fromisoformat(start)).days
+            units = nonnegative(lot['units'])
+            start, application, confirmation = validate_redemption_dates(
+                lot.get('confirmed_on'), redemption_application=redemption_application,
+                redemption_confirmation=redemption_confirmation)
+            end = {'confirmation_to_confirmation_exclusive_end':confirmation,
+                   'confirmation_to_application_exclusive_end':application}.get(basis)
+            days = None if start is None or end is None else (end-start).days
             rate = None if days is None else self.schedule.redemption_rate(days)
             rows.append({'lot_id':lot['lot_id'], 'units':str(units), 'holding_days':days,
                          'rate':None if rate is None else str(rate),
