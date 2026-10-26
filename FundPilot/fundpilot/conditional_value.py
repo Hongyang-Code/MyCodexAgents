@@ -182,9 +182,14 @@ def evaluate(protocol, decision, nav_raw, sources):
             else:exit_parts[f]=units[f]*nav[f,dates[-1]]*rates[f][1]
         exit_fees=None if any(v is None for v in exit_parts.values()) else sum(exit_parts.values())
         exit_net=None if exit_fees is None else gross_exit-exit_fees
+        has_risky_units=any(v!=ZERO for v in units.values())
+        liquidation_status=('not_applicable_no_risky_units' if not has_risky_units else
+                            'pending_missing_redemption_evidence' if exit_fees is None else
+                            'conditional_fee_computed')
         liquidation_dd=None if exit_net is None else max(dd,(peak-free-exit_net)/peak)
         liquidation={**metadata,'conditional_equity_after_exit_fee':str(free+exit_net) if exit_net is not None else None,
             'hypothetical_exit_fee':str(exit_fees) if exit_fees is not None else None,'hypothetical_exit_proceeds_not_available_cash':str(exit_net) if exit_net is not None else None,
+            'conditional_liquidation_status':liquidation_status,
             'available_cash_at_window_end':str(free),'assumed_receipt_date':receipt,
             'conditional_cash_if_assumed_receipt_occurs':str(free+exit_net) if receipt is not None and exit_net is not None else None,
             'not_actual_sale_or_receivable':True,'conditional_total_cash_fees':str(fees+exit_fees) if exit_fees is not None else None,

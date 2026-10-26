@@ -90,11 +90,15 @@ class OfficialFeeTests(unittest.TestCase):
             expected=D('500')+D('500')/D('1.02')/D('10')*D('12')
             self.assertEqual(D(c['pre_liquidation_nav_mark']['book_equity']),expected)
             self.assertIsNone(c['liquidation_scenario']['conditional_equity_after_exit_fee'])
+            self.assertEqual(c['liquidation_scenario']['conditional_liquidation_status'],
+                             'pending_missing_redemption_evidence')
             self.assertIsNone(result['same_scenario_comparisons']['against_cash']['liquidation_difference'])
             self.assertFalse(c['liquidation_scenario']['conditional_risk_gates_passed'])
             a['entry_confirmation_dates']={f:'2026-01-03' for f in p['funds']}
             a['exit_confirmation_dates']={f:'2026-01-07' for f in p['funds']}
             c=evaluate(p,d,n,s)['outcomes']['llm_allocation']
+            self.assertEqual(c['liquidation_scenario']['conditional_liquidation_status'],
+                             'conditional_fee_computed')
             self.assertAlmostEqual(D(c['liquidation_scenario']['hypothetical_exit_fee']),(expected-D('500'))*D('.03'), places=24)
             self.assertEqual(c['liquidation_scenario']['available_cash_at_window_end'],'500')
             swapped=deepcopy(p);swapped['assumptions']['costs']['A']=deepcopy(a['costs']['B'])
