@@ -69,6 +69,25 @@ class OfficialFees:
             raise ValueError('unverified historical applicability; explicit document-version scenario required')
         return 'verified_interval_declaration' if confirmed else 'document_version_conditional_not_historical_verification'
 
+    def execution_qualification(self, document_version_status):
+        """Describe execution evidence gaps without changing quoted arithmetic.
+
+        A documented rule is still pending here because this module intentionally
+        does not apply product-specific amount or share rounding.
+        """
+        r = self.record
+        def rounding_status(kind):
+            rule = r.get('product_' + kind + '_rounding_rule')
+            evidence = r.get('product_' + kind + '_rounding_evidence')
+            if all(isinstance(value, str) and value.strip() for value in (rule, evidence)):
+                return 'documented_not_applied_to_conditional_math'
+            return 'pending_missing_rule_or_evidence'
+        return {'document_version_status':document_version_status,
+                'product_amount_rounding_status':rounding_status('amount'),
+                'product_share_rounding_status':rounding_status('share'),
+                'status':'pending_historical_execution_evidence',
+                'executable_returns_authorized':False}
+
     def subscription(self, gross, *, discount=None, discount_evidence=None):
         gross = nonnegative(gross)
         if gross == 0:
