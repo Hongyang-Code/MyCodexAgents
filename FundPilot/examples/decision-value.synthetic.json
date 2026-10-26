@@ -1,0 +1,88 @@
+{
+  "mode": "synthetic",
+  "synthetic_rules_reviewed": true,
+  "no_distributions_or_splits": true,
+  "producer": "synthetic_fixture",
+  "initial_cash": "1000",
+  "instrument": "SYNTH-A",
+  "frozen_at": "2026-01-01T00:00:00Z",
+  "start": "2026-01-02T00:00:00Z",
+  "end": "2026-01-12T00:00:00Z",
+  "buy_rate": ".01",
+  "sell_rate": ".02",
+  "risk": {
+    "max_exposure": "1",
+    "max_drawdown": ".30",
+    "max_cash_fees": "30",
+    "no_leverage": true
+  },
+  "evidence_refs": [
+    "synthetic fixed scenario, not market evidence"
+  ],
+  "missing_evidence": [
+    "real channel fees",
+    "real distributions",
+    "real dealing/settlement rules",
+    "personal risk constraints"
+  ],
+  "opportunities": [
+    {
+      "id": "a",
+      "at": "2026-01-03T00:00:00Z",
+      "determined_at": "2026-01-04T00:00:00Z",
+      "published_at": "2026-01-04T12:00:00Z",
+      "confirmed_at": "2026-01-05T00:00:00Z",
+      "received_at": "2026-01-06T00:00:00Z",
+      "price": "1"
+    },
+    {
+      "id": "b",
+      "at": "2026-01-06T00:00:00Z",
+      "determined_at": "2026-01-07T00:00:00Z",
+      "published_at": "2026-01-07T12:00:00Z",
+      "confirmed_at": "2026-01-08T00:00:00Z",
+      "received_at": "2026-01-10T00:00:00Z",
+      "price": "1.1"
+    }
+  ],
+  "marks": [
+    {
+      "at": "2026-01-02T00:00:00Z",
+      "nav": "1"
+    },
+    {
+      "at": "2026-01-05T00:00:00Z",
+      "nav": "1"
+    },
+    {
+      "at": "2026-01-08T00:00:00Z",
+      "nav": "1.1"
+    },
+    {
+      "at": "2026-01-12T00:00:00Z",
+      "nav": ".9"
+    }
+  ],
+  "decisions": [
+    {
+      "opportunity": "a",
+      "action": "buy",
+      "quantity": "400",
+      "reason": "synthetic partial allocation",
+      "no_action_counterfactual": "cash remains1000 with zero return",
+      "cost_coverage_evidence": "synthetic assumption500bps exceeds300bps fixed hurdle",
+      "expected_gain_bps": "500",
+      "evidence_cutoff": "2026-01-01T00:00:00Z"
+    },
+    {
+      "opportunity": "b",
+      "action": "sell",
+      "quantity": "100",
+      "reason": "synthetic exposure reduction",
+      "no_action_counterfactual": "keep confirmed units exposed",
+      "cost_coverage_evidence": "explicit2percent synthetic sell cost",
+      "expected_gain_bps": null,
+      "evidence_cutoff": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
