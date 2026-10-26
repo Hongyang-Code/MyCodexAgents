@@ -44,6 +44,8 @@ class ConditionalValueTests(unittest.TestCase):
         self.assertIsNone(c['liquidation_scenario']['conditional_cash_if_assumed_receipt_occurs'])
         self.assertGreater(D(c['pre_liquidation_nav_mark']['modeled_units_pending_confirmation_value']),0)
         self.assertEqual(r['outcomes']['cash']['pre_liquidation_nav_mark']['book_equity'],'1000')
+        self.assertEqual(r['outcomes']['cash']['liquidation_scenario']['conditional_liquidation_status'],
+                         'not_applicable_no_risky_units')
         self.assertEqual(r['promotion'],'retain_stable');self.assertFalse(r['independent_oos'])
         self.assertTrue(all(row['not_actual_fund_total_return'] for row in c['daily_curve']))
     def test_costs_and_time_shared_with_equal_weight(self):
@@ -60,6 +62,18 @@ class ConditionalValueTests(unittest.TestCase):
         with self.assertRaises(ValueError):evaluate(p,d,n,s)
         p,d,n,s=fixture();n=b'\n'.join(n.splitlines()[:-1])+b'\n'
         with self.assertRaisesRegex(ValueError,'missing NAV'):evaluate(p,d,n,s)
+
+    def test_historical_execution_qualification_keeps_scenario_events_pending(self):
+        p,d,n,s=fixture();r=evaluate(p,d,n,s)
+        q=r['historical_execution_qualification']
+        self.assertEqual(q['status'],'pending_historical_execution_evidence')
+        self.assertFalse(q['executable_returns_authorized'])
+        self.assertEqual(q['distribution_event_status'],'pending_scenario_assumption_not_historical_verification')
+        self.assertEqual(q['split_event_status'],'pending_scenario_assumption_not_historical_verification')
+        self.assertEqual(q['funds']['A']['product_amount_rounding_status'],'pending_not_modeled_for_scenario_rate')
+        self.assertEqual(q['funds']['A']['product_share_rounding_status'],'pending_not_modeled_for_scenario_rate')
+        self.assertAlmostEqual(D(r['outcomes']['llm_allocation']['pre_liquidation_nav_mark']['book_equity']),
+                               D('1045.454545454545454545454545'))
     def test_no_direction_conversion_or_leverage(self):
         p,d,n,s=fixture();d['decision_kind']='direction_card'
         with self.assertRaises(ValueError):evaluate(p,d,n,s)
@@ -106,6 +120,8 @@ class ConditionalValueTests(unittest.TestCase):
         self.assertGreater(D(r['same_scenario_comparisons']['against_equal_weight']['pre_liquidation_difference']),0)
         self.assertEqual(r['risky_allocation_fraction'],'0');self.assertTrue(r['cash_equivalent_allocation'])
         self.assertFalse(r['active_profitability_validated']);self.assertEqual(r['promotion'],'retain_stable')
+        self.assertEqual(r['outcomes']['llm_allocation']['liquidation_scenario']['conditional_liquidation_status'],
+                         'not_applicable_no_risky_units')
 
     def test_frozen_window_cannot_be_changed(self):
         p,d,n,s=fixture();d['end_date']='2026-01-03'

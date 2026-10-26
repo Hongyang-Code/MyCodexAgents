@@ -18,6 +18,28 @@ REQUIREMENTS = {
 }
 
 
+def _action_subject_gaps(subject):
+    """Return fail-closed evidence gaps for a fund/class/channel subject key.
+
+    This validates only the key shape.  It does not establish that any named
+    fund, share class or channel is real or available to the user.
+    """
+    if not isinstance(subject, str):
+        return ('identity', 'fees', 'dealing'), 'invalid_subject_key'
+    parts = [part.strip() for part in subject.split('/')]
+    if len(parts) != 3 or any(not part for part in parts):
+        return ('identity', 'fees', 'dealing'), 'invalid_subject_key'
+    fund, share_class, channel = parts
+    if not (re.fullmatch(r'[0-9]{6}', fund) or fund.startswith('SYNTH')):
+        return ('identity',), 'unqualified_fund_identity'
+    gaps = []
+    if share_class.lower() == 'unknown':
+        gaps.append('identity')
+    if channel.lower() == 'unknown':
+        gaps.extend(('fees', 'dealing'))
+    return tuple(gaps), ('unknown_components' if gaps else 'qualified_shape_only')
+
+
 @dataclass(frozen=True)
 class Evidence:
     evidence_id: str
@@ -93,9 +115,14 @@ def assess(purpose,subject,records,cutoff):
     # Known unresolved conflicts survive expiry and ordinary version replacement.
     # This schema has no reviewed resolution event: supersedes is not one.
     conflicts={r.topic for r in known if r.conflicted is not False}
-    missing=[topic for topic in REQUIREMENTS[purpose] if topic in conflicts or not any(r.topic==topic for r in facts)]
+    subject_gaps, subject_status = ((), 'not_applicable')
+    if purpose == 'action_research':
+        subject_gaps, subject_status = _action_subject_gaps(subject)
+    missing=[topic for topic in REQUIREMENTS[purpose]
+             if topic in conflicts or topic in subject_gaps or not any(r.topic==topic for r in facts)]
     return dict(purpose=purpose,subject=subject,status='abstain' if missing else 'evidence_ready_for_review',
                 missing=missing,evidence_ids=[r.evidence_id for r in facts],probability=None,
+                subject_status=subject_status,
                 action_authorized=False,limitations=['Schema/review attestations do not establish source truth',
                 'Macro transmission remains a hypothesis; exposure can be stale',
                 'Existing account, risk and trading gates remain required'])

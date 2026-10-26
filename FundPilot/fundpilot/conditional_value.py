@@ -80,14 +80,35 @@ def evaluate(protocol, decision, nav_raw, sources):
         raise ValueError('known events conflict with this scenario or event check missing')
     if set(a['costs'])!=set(funds) or set(a['entry_confirmation_dates'])!=set(funds) or set(a['exit_confirmation_dates'])!=set(funds):
         raise ValueError('cost and confirmation assumptions required for each fund')
-    rates={}
+    rates={}; official={}; fee_coverage={}; fund_execution={}
     for f in funds:
         cost=a['costs'][f]
-        buy=number(cost['buy_rate'],positive=False);sell=number(cost['exit_rate'],positive=False)
-        if buy>=1 or sell>=1 or cost.get('buy_fee_basis')!='net':
-            raise ValueError('explicit fractional rates <1 and net buy-fee basis required')
-        required_text(cost,'holding_period_condition')
-        rates[f]=(buy,sell)
+        if 'official_rule' in cost:
+            from .official_fees import load_cost
+            rule=load_cost(cost)
+            ident=cost['identity']
+            if f not in (ident['fund_code'], ident['fund_code']+':'+ident['share_class'],
+                         ident['fund_code']+':'+ident['share_class']+':'+ident['currency']):
+                raise ValueError('official fee assigned to a different fund')
+            status=rule.check(cost['identity'],p['entry_date'],document_version_scenario=cost.get('document_version_scenario') is True)
+            rule.check(cost['identity'],p['end_date'],document_version_scenario=cost.get('document_version_scenario') is True)
+            official[f]=rule
+            fee_coverage[f]={'version_status':status,'rule_sha256':rule.record['raw_sha256'],
+                             'version':rule.record['version'],'published_on':rule.record['published_on'],
+                             'effective_from':rule.record.get('effective_from'),'effective_until':rule.record.get('effective_until'),
+                             'channel_discount':cost.get('discount'),'actual_channel_fee_verified':False}
+            fund_execution[f]=rule.execution_qualification(status)
+        else:
+            buy=number(cost['buy_rate'],positive=False);sell=number(cost['exit_rate'],positive=False)
+            if buy>=1 or sell>=1 or cost.get('buy_fee_basis')!='net':
+                raise ValueError('explicit fractional rates <1 and net buy-fee basis required')
+            required_text(cost,'holding_period_condition')
+            rates[f]=(buy,sell)
+            fund_execution[f]={'document_version_status':'scenario_rate_not_official_document',
+                               'product_amount_rounding_status':'pending_not_modeled_for_scenario_rate',
+                               'product_share_rounding_status':'pending_not_modeled_for_scenario_rate',
+                               'status':'pending_historical_execution_evidence',
+                               'executable_returns_authorized':False}
         confirmed=a['entry_confirmation_dates'][f]
         if confirmed is not None and date.fromisoformat(confirmed)<date.fromisoformat(p['entry_date']):
             raise ValueError('assumed confirmation precedes entry')
@@ -132,12 +153,24 @@ def evaluate(protocol, decision, nav_raw, sources):
         nav[key]=number(row['nav'])
     missing=[(f,d) for f in funds for d in dates if (f,d) not in nav]
     if missing:raise ValueError('missing NAV, no filling/interpolation: '+str(missing[:3]))
-    metadata={**SCOPE,'assumptions':a,'unknown_evidence':p['unknown_evidence']}
+    execution_qualification={'status':'pending_historical_execution_evidence',
+        'document_version_scope':'per_fund',
+        'distribution_event_status':'pending_scenario_assumption_not_historical_verification',
+        'split_event_status':'pending_scenario_assumption_not_historical_verification',
+        'funds':fund_execution,'executable_returns_authorized':False}
+    metadata={**SCOPE,'assumptions':a,'unknown_evidence':p['unknown_evidence'],
+              'historical_execution_qualification':execution_qualification}
+    if official:metadata['official_fee_coverage']=fee_coverage
 
     def curve(allocation):
-        free=initial-sum(allocation.values()); units={}; fees=ZERO; turnover=ZERO
+        free=initial-sum(allocation.values()); units={}; fees=ZERO; turnover=ZERO;quotes={}
         for f in funds:
-            net=allocation[f]/(1+rates[f][0]); fees+=allocation[f]-net
+            if f in official:
+                cost=a['costs'][f]
+                q=official[f].subscription(allocation[f],discount=cost.get('discount'),discount_evidence=cost.get('discount_evidence'))
+                quotes[f]={'subscription':q};net=D(q['net'])
+            else:net=allocation[f]/(1+rates[f][0])
+            fees+=allocation[f]-net
             units[f]=net/nav[f,dates[0]];turnover+=net
         peak=initial; dd=ZERO; maximum_exposure=ZERO;daily=[]
         for day in dates:
@@ -151,31 +184,44 @@ def evaluate(protocol, decision, nav_raw, sources):
                 'capital_occupied':str(risky),'exposure':str(exposure),'cash_fees_paid_assumed':str(fees),
                 'valuation_semantics':'conditional economic exposure from entry NAV; not confirmed actual shares'})
         terminal=daily[-1];gross_exit=sum(units[f]*nav[f,dates[-1]] for f in funds)
-        exit_fees=sum(units[f]*nav[f,dates[-1]]*rates[f][1] for f in funds)
-        exit_net=gross_exit-exit_fees
-        liquidation_dd=max(dd,(peak-free-exit_net)/peak)
-        liquidation={**metadata,'conditional_equity_after_exit_fee':str(free+exit_net),
-            'hypothetical_exit_fee':str(exit_fees),'hypothetical_exit_proceeds_not_available_cash':str(exit_net),
+        exit_parts={}
+        for f in funds:
+            if f in official:
+                q=official[f].redemption([{'lot_id':'conditional-entry','units':str(units[f]),'confirmed_on':a['entry_confirmation_dates'][f]}],nav[f,dates[-1]],
+                    redemption_application=a.get('exit_application_dates',{}).get(f),redemption_confirmation=a['exit_confirmation_dates'][f])
+                quotes[f]['redemption']=q
+                exit_parts[f]=ZERO if units[f]==0 else (None if q['fee'] is None else D(q['fee']))
+            else:exit_parts[f]=units[f]*nav[f,dates[-1]]*rates[f][1]
+        exit_fees=None if any(v is None for v in exit_parts.values()) else sum(exit_parts.values())
+        exit_net=None if exit_fees is None else gross_exit-exit_fees
+        has_risky_units=any(v!=ZERO for v in units.values())
+        liquidation_status=('not_applicable_no_risky_units' if not has_risky_units else
+                            'pending_missing_redemption_evidence' if exit_fees is None else
+                            'conditional_fee_computed')
+        liquidation_dd=None if exit_net is None else max(dd,(peak-free-exit_net)/peak)
+        liquidation={**metadata,'conditional_equity_after_exit_fee':str(free+exit_net) if exit_net is not None else None,
+            'hypothetical_exit_fee':str(exit_fees) if exit_fees is not None else None,'hypothetical_exit_proceeds_not_available_cash':str(exit_net) if exit_net is not None else None,
+            'conditional_liquidation_status':liquidation_status,
             'available_cash_at_window_end':str(free),'assumed_receipt_date':receipt,
-            'conditional_cash_if_assumed_receipt_occurs':str(free+exit_net) if receipt is not None else None,
-            'not_actual_sale_or_receivable':True,'conditional_total_cash_fees':str(fees+exit_fees),
+            'conditional_cash_if_assumed_receipt_occurs':str(free+exit_net) if receipt is not None and exit_net is not None else None,
+            'not_actual_sale_or_receivable':True,'conditional_total_cash_fees':str(fees+exit_fees) if exit_fees is not None else None,
             'conditional_gross_turnover_including_exit':str(turnover+gross_exit),
-            'max_drawdown_including_hypothetical_exit_fee':str(liquidation_dd),
-            'conditional_risk_gates_passed':liquidation_dd<=max_dd and maximum_exposure<=cap and fees+exit_fees<=max_fees}
+            'max_drawdown_including_hypothetical_exit_fee':str(liquidation_dd) if liquidation_dd is not None else None,
+            'conditional_risk_gates_passed':liquidation_dd is not None and liquidation_dd<=max_dd and maximum_exposure<=cap and fees+exit_fees<=max_fees}
         return {**metadata,'daily_curve':daily,'pre_liquidation_nav_mark':terminal,'liquidation_scenario':liquidation,
-            'units_hypothetical':{f:str(v) for f,v in units.items()},'entry_cash_fees':str(fees),
+            **({'official_fee_quotes':quotes} if official else {}),'units_hypothetical':{f:str(v) for f,v in units.items()},'entry_cash_fees':str(fees),
             'gross_entry_turnover':str(turnover),'entry_turnover_over_initial':str(turnover/initial),
             'max_drawdown_on_supplied_nav_marks':str(dd),'max_exposure_on_supplied_nav_marks':str(maximum_exposure),
             'mean_capital_occupied':str(sum(D(r['capital_occupied']) for r in daily)/len(daily)),
             'pre_liquidation_risk_gates_passed':dd<=max_dd and maximum_exposure<=cap and fees<=max_fees,
-            'liquidation_fee_gate_passed':fees+exit_fees<=max_fees}
+            'liquidation_fee_gate_passed':exit_fees is not None and fees+exit_fees<=max_fees}
     equal={f:initial*cap/D(len(funds)) for f in funds}
     # Last residual stays cash; Decimal equal weights need not divide finitely.
     if sum(equal.values())>initial*cap:equal[funds[-1]]-=sum(equal.values())-initial*cap
     outcomes={'cash':curve({f:ZERO for f in funds}),'equal_weight_buy_hold':curve(equal),'llm_allocation':curve(alloc)}
     candidate=outcomes['llm_allocation']
     comparisons={('against_cash' if k=='cash' else 'against_equal_weight'):{'pre_liquidation_difference':str(D(candidate['pre_liquidation_nav_mark']['book_equity'])-D(outcomes[k]['pre_liquidation_nav_mark']['book_equity'])),
-                    'liquidation_difference':str(D(candidate['liquidation_scenario']['conditional_equity_after_exit_fee'])-D(outcomes[k]['liquidation_scenario']['conditional_equity_after_exit_fee']))}
+                    'liquidation_difference':(str(D(candidate['liquidation_scenario']['conditional_equity_after_exit_fee'])-D(outcomes[k]['liquidation_scenario']['conditional_equity_after_exit_fee'])) if candidate['liquidation_scenario']['conditional_equity_after_exit_fee'] is not None and outcomes[k]['liquidation_scenario']['conditional_equity_after_exit_fee'] is not None else None)}
                  for k in ('cash','equal_weight_buy_hold')}
     return {**metadata,'producer':decision['producer'],'initial_cash':str(initial),'entry_date':dates[0],'end_date':dates[-1],
         'cash_baseline_interest':'0','risky_allocation_fraction':str(sum(alloc.values())/initial),
@@ -195,6 +241,11 @@ def run(protocol_path, protocol_sha256, decision_path, nav_path, sources_path, o
     raw={k:Path(v).read_bytes() for k,v in paths.items()}
     if digest(raw['protocol'])!=protocol_sha256:raise ValueError('frozen protocol hash mismatch')
     p=json.loads(raw['protocol'])
+    if any('official_rule' in cost for cost in p['assumptions']['costs'].values()):
+        from .upstream_bridge import read_private, private_parent
+        for key,path in paths.items():
+            if read_private(path)!=raw[key]:raise ValueError('input changed during private fee import')
+        with private_parent(output):pass
     for key in ('decision','nav','sources'):
         if p['input_sha256'].get(key)!=digest(raw[key]):raise ValueError('frozen '+key+' hash mismatch')
     result=evaluate(p,json.loads(raw['decision']),raw['nav'],json.loads(raw['sources']))

@@ -59,6 +59,26 @@ class InformationTests(unittest.TestCase):
         self.assertEqual(result['status'],'evidence_ready_for_review');self.assertFalse(result['action_authorized'])
         self.assertIsNone(result['probability'])
 
+    def test_action_subject_requires_fund_class_channel_shape(self):
+        topics=('identity','nav','fees','dealing','distributions','calendar')
+        for subject in ('000051','000051/A','not-a-code/A/channel','000051/A/channel/extra'):
+            rows=[evidence(evidence_id=topic,subject=subject,topic=topic) for topic in topics]
+            result=assess('action_research',subject,rows,self.cutoff)
+            self.assertEqual(result['status'],'abstain')
+            self.assertNotEqual(result['subject_status'],'qualified_shape_only')
+            self.assertIn('identity',result['missing'])
+
+    def test_unknown_share_or_channel_cannot_be_action_ready(self):
+        topics=('identity','nav','fees','dealing','distributions','calendar')
+        cases={'000051/unknown/支付宝':('identity',),
+               '000051/A/unknown':('fees','dealing')}
+        for subject,gaps in cases.items():
+            rows=[evidence(evidence_id=topic,subject=subject,topic=topic) for topic in topics]
+            result=assess('action_research',subject,rows,self.cutoff)
+            self.assertEqual(result['status'],'abstain')
+            self.assertEqual(result['subject_status'],'unknown_components')
+            for gap in gaps:self.assertIn(gap,result['missing'])
+
     def test_unresolved_conflict_abstains_even_with_other_fact(self):
         rows=[evidence(topic='identity'),evidence(evidence_id='other',topic='identity',conflicted=True)]
         self.assertIn('identity',assess('valuation',rows[0].subject,rows,self.cutoff)['missing'])

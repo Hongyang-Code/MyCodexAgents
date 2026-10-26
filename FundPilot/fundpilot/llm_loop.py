@@ -81,7 +81,9 @@ def validate(cards, sources, calendar):
     for s in sources:
         if s.get('reviewed') is not True or not s.get('url','').startswith('https://'):
             raise ValueError('reviewed public source required')
-        if mode != 'retrospective_diagnostic' and not re.fullmatch('[0-9a-f]{64}',s.get('raw_sha256','')):
+        raw_hash = s.get('raw_sha256')
+        if mode != 'retrospective_diagnostic' and (
+                not isinstance(raw_hash, str) or not re.fullmatch('[0-9a-f]{64}', raw_hash)):
             raise ValueError('source hash required')
         known = timestamp(s['known_available_at'])
         if known < timestamp(s['retrieved_at']):

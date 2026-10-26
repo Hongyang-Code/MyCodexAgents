@@ -60,6 +60,28 @@ class LoopTests(unittest.TestCase):
     def test_duplicate_card(self):
         self.alter('cards.json',lambda d:d['cards'].append(d['cards'][0]))
         with self.assertRaises(ValueError):self.frozen()
+    def test_malformed_hash_types_raise_validation_error_before_freeze(self):
+        # Real parser failure: unknown raw hash was null rather than an empty string.
+        # Malformed source metadata must not create a frozen record or leak TypeError.
+        for value in (None, False, 13, [], {}):
+            with self.subTest(hash_type=type(value).__name__):
+                self.alter('sources.json',lambda d:d[0].update(raw_sha256=value))
+                with self.assertRaisesRegex(ValueError,'source hash required'):
+                    self.frozen()
+                self.assertFalse((self.root/'frozen').exists())
+
+    def test_null_raw_hash_diagnostic_does_not_become_strict_evidence(self):
+        self.diagnostic()
+        self.alter('sources.json',lambda d:d[0].update(raw_sha256=None))
+        self.frozen()
+        receipt=json.loads((self.root/'frozen/receipt.json').read_text())
+        self.assertEqual(receipt['source_time_qualification'],'limited')
+        self.assertTrue(receipt['non_oos'])
+        self.alter('cards.json',lambda d:d.update(mode='retrospective'))
+        with self.assertRaisesRegex(ValueError,'source hash required'):
+            freeze(self.root/'cards.json',self.root/'sources.json',self.root/'calendar.json',self.root/'strict-output')
+        self.assertFalse((self.root/'strict-output').exists())
+
     def test_future_source(self):
         self.alter('sources.json',lambda d:d[0].update(known_available_at='2026-02-01T00:00:00Z'))
         with self.assertRaises(ValueError):self.frozen()

@@ -62,6 +62,8 @@ results.json及manifest.json均私有保存（目录0700、文件0600）。manif
 
 pre_liquidation_nav_mark为期末持仓NAV估值，未扣假设退出费。liquidation_scenario另列扣退出费的条件资产、退出费、假设退出款、总费用、含退出成交额、含退出费回撤和风险门槛。它只是假设同NAV清算的折价估值，不是已经下单/确认的应收。available_cash_at_window_end始终只有未投入现金；未知到账时conditional_cash_if_assumed_receipt_occurs为null。即便明确假设未来到账，也只另给“若该假设发生”的现金值，不回填期末现金。
 
+conditional_liquidation_status区分三种情况：全现金或零风险份额为not_applicable_no_risky_units，不要求虚构赎回证据；持有风险份额但赎回证据不足为pending_missing_redemption_evidence；证据足以计算条件退出费时为conditional_fee_computed。全现金状态只说明没有需要清算的风险份额，不构成主动盈利或投资验收通过。
+
 比较项分别命名against_cash和against_equal_weight；另报risky_allocation_fraction、cash_equivalent_allocation。全现金风险资产投入为0，即使优于等权买持，也不能验证主动盈利能力；active_profitability_validated始终false。
 
 三策略报告相同估值点最大回撤、最大敞口、平均资本占用与同条件终值差；现金利息固定0。门槛失败保留，不选费用参数或基金来美化结果。promotion始终retain_stable；条件账面优势不支持实际净收益/可执行alpha。后续仍需未来未见样本、成本风险与不确定性复核，以及独立授权。
@@ -69,3 +71,27 @@ pre_liquidation_nav_mark为期末持仓NAV估值，未扣假设退出费。liqui
 ## 已测与未测
 
 合成fixture验证计算、原字节哈希、CLI完整运行、同分配与等权完全一致、费用不缺省、清算价值不计作现金、确认自然日、已知分红冲突及缺NAV拒绝。真实历史NAV和真实LLM分配由独立私有研究任务运行；本开发任务不生成方案、不读取用户持仓、不公开实际研究，不修改原预测或历史90情景。
+
+## 经审阅的官方费用导入
+
+`assumptions.costs[fund]`可用`official_rule`、`raw_document_path`、`identity`替代原固定费率字段。`official_fees.OfficialFees`复用现有`risk.FeeSchedule/FeeBand`逐批自然日赎回费工具，扩展含费金额档与每笔固定申购费。该结构已接入本页CLI及`evaluate`的每个方案，等权基线也按自己的实际申购金额选档。没有新增依赖或自动策略生成。
+
+`official_rule`必需字段为：fund_code、share_class、currency、version、source_url（HTTPS）、published_on、reviewed_by、reviewed=true、pages、applicability_note、raw_sha256、nav_includes_recurring_fees=true、subscription_bands、redemption_bands。原件路径须在checkout外，文件0600、直接父目录0700，不接受符号或硬链接；运行时重新验证原字节SHA。审阅字段由调用方对原件负责，schema和哈希不证明来源真实。不能把下载日期填作规则发布日期或生效日。
+
+`subscription_bands`逐档给min_amount（含）、max_amount（不含，末档null），并且恰选rate或fixed_fee之一；必须从0连续覆盖，拒绝交叉和缺档。比例申购使用含费金额/(1+rate)，固定费从含费金额直接扣除，零申购不收固定费。`redemption_bands`沿用FeeBand的min_days/max_days**两端含**及rate，未覆盖的自然日拒绝，不把“年”未经核实换成365日。A/C、币种和标的键必须匹配，不自动沿用其他类别的费率。
+
+`effective_from/effective_until`未知时填null，默认拒绝历史适用；只有明确`document_version_scenario=true`才允许公告日之后的**该文档版本条件诊断**，输出仍不签认历史规则连续适用。已给生效区间之外必拒绝，不能用此开关绕过。公告日晚于交易日也拒绝。历史生效日期未知和渠道优惠未知分别保留，不阻塞已明确允许的官方标准版本情景。
+
+`discount`省略/null表示只算官方标准，渠道折扣unknown；1表示有来源的无折扣，0表示有来源的全免比例申购费。显式优惠另须discount_evidence；不默认支付宝优惠，也不推定固定费能折扣。管理/托管/销售服务等NAV内费用不再扣。
+
+`holding_basis`允许confirmation_to_confirmation_exclusive_end或confirmation_to_application_exclusive_end，并须holding_basis_evidence支持具体口径；未知用null。持有日按该口径的明确日期差计算，不用估值行数、工作日或平均批次年龄。`OfficialFees.redemption`接收已经明确选择的逐批份额，不猜FIFO卖出数量；返回每批持有日/费率/费用。当前固定初始分配估值只生成一个条件申购批次，不清算真实初始持仓。
+
+申购确认或相应赎回日期/计日口径缺失时，保留已知申购费用、份额和NAV估值；赎回费、清算净额及依赖它的比较置null，风险费用闸门不通过。不会改成0或擅自增加有利确认日。实际确认/到账、分红、产品取整、暂停与历史适用性未齐时，输出继续是非可执行条件估值；本精确Decimal路径没有冒称产品逐笔两位取整。
+
+合成使用和金额/日期边界见`tests/test_official_fees.py`：
+
+```bash
+PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_official_fees.py -v
+```
+
+输入和输出仍沿用上方CLI命令，真实文档、审阅记录、修订依据和纠错结果只存私有。费用事实纠错须另存修订及旧输入哈希，冻结原资产、窗口、分配和价格；不覆写旧结果，不计作策略alpha、结构晋级或投资验收。
