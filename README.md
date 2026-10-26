@@ -11,6 +11,7 @@
 | ResearchFieldSurvey | 至少20篇主干论文，方法路线、发展脉络与阅读路径 | [使用说明](ResearchFieldSurvey/README.md) |
 | ResearchHotspotFollow | 研究领域近一周新论文四线追踪，每篇一条，轻量评估和文字审校 | [ResearchHotspotFollow/README.md](ResearchHotspotFollow/README.md) |
 | NewsChaser | 指定时期的重要新闻简报，地区与领域双索引，事实核查及文字审校 | [NewsChaser/README.md](NewsChaser/README.md) |
+| FundPilot | 场外基金研究基础模块、可审计账本、验证与条件通知；未正式部署 | [使用说明](FundPilot/README.md) |
 | TextReadable | 保持原意的可读性与用语严谨性审校，支持其他智能体复用 | [TextReadable/README.md](TextReadable/README.md) |
 | PaperReader | 论文概括、阅读价值判断、证据评估、详细报告和结构导图 | [PaperReader/README.md](PaperReader/README.md) |
 

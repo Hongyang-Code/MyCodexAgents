@@ -1,0 +1,11 @@
+{
+  "prediction_batches": 1,
+  "funds": 3,
+  "horizons": 3,
+  "concurrent_subtasks": 2,
+  "subtasks": 3,
+  "source_attempts": 12,
+  "transient_retries": 1,
+  "candidate_interval_days": 7,
+  "candidate_evaluations": 1
+}

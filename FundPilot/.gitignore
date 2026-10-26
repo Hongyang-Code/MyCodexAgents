@@ -1,0 +1,9 @@
+# All real portfolio, prediction, calibration and financial evidence remains private.
+inputs/
+outputs/
+state/
+.cache/
+*.sqlite*
+*.db*
+*.snapshot.zip
+config/private*.json
