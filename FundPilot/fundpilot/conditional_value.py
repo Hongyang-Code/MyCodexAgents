@@ -80,7 +80,7 @@ def evaluate(protocol, decision, nav_raw, sources):
         raise ValueError('known events conflict with this scenario or event check missing')
     if set(a['costs'])!=set(funds) or set(a['entry_confirmation_dates'])!=set(funds) or set(a['exit_confirmation_dates'])!=set(funds):
         raise ValueError('cost and confirmation assumptions required for each fund')
-    rates={}; official={}; fee_coverage={}
+    rates={}; official={}; fee_coverage={}; fund_execution={}
     for f in funds:
         cost=a['costs'][f]
         if 'official_rule' in cost:
@@ -97,12 +97,18 @@ def evaluate(protocol, decision, nav_raw, sources):
                              'version':rule.record['version'],'published_on':rule.record['published_on'],
                              'effective_from':rule.record.get('effective_from'),'effective_until':rule.record.get('effective_until'),
                              'channel_discount':cost.get('discount'),'actual_channel_fee_verified':False}
+            fund_execution[f]=rule.execution_qualification(status)
         else:
             buy=number(cost['buy_rate'],positive=False);sell=number(cost['exit_rate'],positive=False)
             if buy>=1 or sell>=1 or cost.get('buy_fee_basis')!='net':
                 raise ValueError('explicit fractional rates <1 and net buy-fee basis required')
             required_text(cost,'holding_period_condition')
             rates[f]=(buy,sell)
+            fund_execution[f]={'document_version_status':'scenario_rate_not_official_document',
+                               'product_amount_rounding_status':'pending_not_modeled_for_scenario_rate',
+                               'product_share_rounding_status':'pending_not_modeled_for_scenario_rate',
+                               'status':'pending_historical_execution_evidence',
+                               'executable_returns_authorized':False}
         confirmed=a['entry_confirmation_dates'][f]
         if confirmed is not None and date.fromisoformat(confirmed)<date.fromisoformat(p['entry_date']):
             raise ValueError('assumed confirmation precedes entry')
@@ -147,7 +153,13 @@ def evaluate(protocol, decision, nav_raw, sources):
         nav[key]=number(row['nav'])
     missing=[(f,d) for f in funds for d in dates if (f,d) not in nav]
     if missing:raise ValueError('missing NAV, no filling/interpolation: '+str(missing[:3]))
-    metadata={**SCOPE,'assumptions':a,'unknown_evidence':p['unknown_evidence']}
+    execution_qualification={'status':'pending_historical_execution_evidence',
+        'document_version_scope':'per_fund',
+        'distribution_event_status':'pending_scenario_assumption_not_historical_verification',
+        'split_event_status':'pending_scenario_assumption_not_historical_verification',
+        'funds':fund_execution,'executable_returns_authorized':False}
+    metadata={**SCOPE,'assumptions':a,'unknown_evidence':p['unknown_evidence'],
+              'historical_execution_qualification':execution_qualification}
     if official:metadata['official_fee_coverage']=fee_coverage
 
     def curve(allocation):
