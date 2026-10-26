@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 
 from .market import number, timestamp
+from .official_fees import validate_redemption_dates
 from .llm_loop import digest, private_dir, write_json
 
 SCOPE = {'mode':'retrospective_conditional', 'not_executable':True,
@@ -80,6 +81,10 @@ def evaluate(protocol, decision, nav_raw, sources):
         raise ValueError('known events conflict with this scenario or event check missing')
     if set(a['costs'])!=set(funds) or set(a['entry_confirmation_dates'])!=set(funds) or set(a['exit_confirmation_dates'])!=set(funds):
         raise ValueError('cost and confirmation assumptions required for each fund')
+    # Optional for compatibility: omission preserves unknown dates, never end_date.
+    applications=a.get('exit_application_dates', {f:None for f in funds})
+    if not isinstance(applications,dict) or set(applications)!=set(funds):
+        raise ValueError('exit application dates required for exactly the frozen funds')
     rates={}; official={}; fee_coverage={}
     for f in funds:
         cost=a['costs'][f]
@@ -103,7 +108,12 @@ def evaluate(protocol, decision, nav_raw, sources):
                 raise ValueError('explicit fractional rates <1 and net buy-fee basis required')
             required_text(cost,'holding_period_condition')
             rates[f]=(buy,sell)
+        application=applications[f]
+        if application is not None and date.fromisoformat(application)!=date.fromisoformat(p['end_date']):
+            raise ValueError('redemption application must match frozen exit NAV date')
         confirmed=a['entry_confirmation_dates'][f]
+        validate_redemption_dates(confirmed, redemption_application=application,
+                                  redemption_confirmation=a['exit_confirmation_dates'][f])
         if confirmed is not None and date.fromisoformat(confirmed)<date.fromisoformat(p['entry_date']):
             raise ValueError('assumed confirmation precedes entry')
         exit_confirmed=a['exit_confirmation_dates'][f]
@@ -176,7 +186,7 @@ def evaluate(protocol, decision, nav_raw, sources):
         for f in funds:
             if f in official:
                 q=official[f].redemption([{'lot_id':'conditional-entry','units':str(units[f]),'confirmed_on':a['entry_confirmation_dates'][f]}],nav[f,dates[-1]],
-                    redemption_application=a.get('exit_application_dates',{}).get(f),redemption_confirmation=a['exit_confirmation_dates'][f])
+                    redemption_application=applications[f],redemption_confirmation=a['exit_confirmation_dates'][f])
                 quotes[f]['redemption']=q
                 exit_parts[f]=ZERO if units[f]==0 else (None if q['fee'] is None else D(q['fee']))
             else:exit_parts[f]=units[f]*nav[f,dates[-1]]*rates[f][1]

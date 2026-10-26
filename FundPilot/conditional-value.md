@@ -45,6 +45,7 @@ PYTHONPATH=FundPilot python -m fundpilot.conditional_value \
 | exit_price_rule | end_nav_same_price_hypothesis，期末同NAV清算估值假设，不是未知价赎回成交 |
 | costs | 每基金对象，buy_rate、exit_rate为明确小于1的非负十进制费率；buy_fee_basis=net，即投入/(1+buy_rate)；holding_period_condition写明固定费率适用的假设及证据不足 |
 | entry_confirmation_dates | 每基金明确假设申购确认日期或null；null为未知 |
+| exit_application_dates（可选） | 省略表示全部未知；若提供，必须恰好覆盖funds，每项为日期或null。显式日期须等于本入口冻结的end_date，匹配end_nav_same_price_hypothesis；不能改用较早/较晚的申请日来选择更有利的费用档。此约束仅适用于本条件估值入口，不是所有真实基金的统一交易规则。 |
 | exit_confirmation_dates | 每基金明确假设赎回确认日期或null；不早于出口NAV日及申购确认日 |
 | exit_receipt_date | 明确假设到账日期或null；有日期须晚于窗口末且不早于所有已给赎回确认日；null不补到账 |
 
@@ -93,3 +94,9 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_offi
 ```
 
 输入和输出仍沿用上方CLI命令，真实文档、审阅记录、修订依据和纠错结果只存私有。费用事实纠错须另存修订及旧输入哈希，冻结原资产、窗口、分配和价格；不覆写旧结果，不计作策略alpha、结构晋级或投资验收。
+
+### 赎回日期一致性
+
+所有已给日期都须有效，不能因某日期不参与当前计日公式而忽略它。已知日期需满足申购确认日 ≤ 赎回申请日 ≤ 赎回确认日；已知到账日仍不得早于确认日。计日口径未知不掩盖已经明确的时序矛盾。逐批费用始终按产品已审阅的起止口径计算，不自动把确认日换成申请日。
+
+缺失日期继续为unknown，不补造申请或到账日。所需计日依据不齐时，保留申购费和期末NAV估值，赎回费及依赖它的清算结果继续为null。合法日期也不证明开放日、未知价计价、历史费率适用性或实际成交已核实。
