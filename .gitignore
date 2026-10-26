@@ -50,3 +50,7 @@ XRWritting/outputs/
 PaperFigureAgent/inputs/
 PaperFigureAgent/outputs/
 PaperFigureAgent/*.egg-info/
+
+# Private reference identity maps must stay outside published configuration.
+XRWritting/private/
+XRWritting/references/private/
