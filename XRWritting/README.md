@@ -1,8 +1,8 @@
 # XRWritting
 
-检查学术文段是否符合李锡荣（Xirong Li）参与论文中归纳的行文特征；指出具体问题，并在保留事实、逻辑与判断强度的前提下改写。说明用简体中文；英文正文保持英文。
+检查学术文段是否符合本目录参考语料中归纳的学术行文特征；指出具体问题，并在保留事实、逻辑与判断强度的前提下改写。说明用简体中文；英文正文保持英文。
 
-入口：[AGENTS.md](AGENTS.md)。流程：[workflow.md](workflow.md)。规则：[style-guide.md](style-guide.md)。原始论文与证据位置：[references/corpus.md](references/corpus.md)。语料包含9篇，版本固定，不需要每次润色重读全部论文。
+入口：[AGENTS.md](AGENTS.md)。流程：[workflow.md](workflow.md)。规则：[style-guide.md](style-guide.md)。匿名语料与证据位置：[references/corpus.md](references/corpus.md)。档案记录9份语料的观察，日常润色使用既有规则。GitHub 版本隐去来源身份，重新核验原文时需要用户私有提供映射。
 
 这是目录指令及辅助检查工具，没有独立模型/API，也不代表作者本人评价。默认最多3轮风格修订，最后复用TextReadable。原文已符合时原样返回。没有材料支持的缺口、实验、消融与结论只指出待补，不写进改稿。
 
@@ -10,7 +10,7 @@
 
 ```text
 请先读取 E:\MyCodexAgents\XRWritting\AGENTS.md 及其要求文件。
-检查下面文段是否符合李锡荣教授参与论文中归纳的行文风格。
+检查下面文段是否符合本目录参考语料中归纳的学术行文风格。
 章节类型：实验结果讨论（不知道时由你判断）。
 如有明确偏离，请指出原句、原因和对应规则，提供完整修改版及前后对照。
 保留数字、术语、引用、逻辑、条件和结论强度。不要新增研究内容。
@@ -27,3 +27,7 @@
 ## 验证
 
 [验收案例](tests/acceptance.md)包括缺证据、不强化推测、无需强改、中文范围及预算。脚本用法见[scripts/README.md](scripts/README.md)。实际结果与限制见[VALIDATION.md](VALIDATION.md)。
+
+## GitHub 隐私边界
+
+公开配置使用 S01～S09 匿名来源编号，不公开参考对象姓名、身份主页、文献题名和原文链接。身份映射只接受私有材料，存放于 private/ 或 references/private/ 等被 Git 排除的位置；当前未宣称已创建或恢复映射。目录名称保持兼容。
