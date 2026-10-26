@@ -78,6 +78,24 @@ class OfficialFeeTests(unittest.TestCase):
         r=record();r['subscription_bands'][1]['min_amount']='999'
         with self.assertRaises(ValueError):OfficialFees(r,RAW)
 
+    def test_execution_qualification_exposes_rounding_gaps_without_rounding_values(self):
+        q=OfficialFees(record(),RAW)
+        status=q.execution_qualification('verified_interval_declaration')
+        self.assertEqual(status['document_version_status'],'verified_interval_declaration')
+        self.assertEqual(status['product_amount_rounding_status'],'pending_missing_rule_or_evidence')
+        self.assertEqual(status['product_share_rounding_status'],'pending_missing_rule_or_evidence')
+        self.assertEqual(status['status'],'pending_historical_execution_evidence')
+        self.assertFalse(status['executable_returns_authorized'])
+        before=q.subscription('500')
+        r=record();r.update(product_amount_rounding_rule='synthetic amount rule',
+                            product_amount_rounding_evidence='synthetic page 2',
+                            product_share_rounding_rule='synthetic share rule',
+                            product_share_rounding_evidence='synthetic page 2')
+        q=OfficialFees(r,RAW);status=q.execution_qualification('verified_interval_declaration')
+        self.assertEqual(status['product_amount_rounding_status'],'documented_not_applied_to_conditional_math')
+        self.assertEqual(status['product_share_rounding_status'],'documented_not_applied_to_conditional_math')
+        self.assertEqual(q.subscription('500'),before)
+
     def test_official_selection_enters_valuation_and_nav_expenses_not_added(self):
         p,d,n,s=fixture();r=record();a=p['assumptions']
         with tempfile.TemporaryDirectory() as td:
@@ -87,6 +105,14 @@ class OfficialFeeTests(unittest.TestCase):
                 a['costs'][f]={'official_rule':rf,'raw_document_path':str(raw),
                              'identity':{k:rf[k] for k in ('fund_code','share_class','currency')}}
             result=evaluate(p,d,n,s);c=result['outcomes']['llm_allocation']
+            qualification=result['historical_execution_qualification']
+            self.assertEqual(qualification['funds']['A']['document_version_status'],
+                             'verified_interval_declaration')
+            self.assertEqual(qualification['funds']['A']['product_amount_rounding_status'],
+                             'pending_missing_rule_or_evidence')
+            self.assertEqual(qualification['distribution_event_status'],
+                             'pending_scenario_assumption_not_historical_verification')
+            self.assertFalse(qualification['executable_returns_authorized'])
             expected=D('500')+D('500')/D('1.02')/D('10')*D('12')
             self.assertEqual(D(c['pre_liquidation_nav_mark']['book_equity']),expected)
             self.assertIsNone(c['liquidation_scenario']['conditional_equity_after_exit_fee'])
