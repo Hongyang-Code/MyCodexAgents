@@ -18,6 +18,14 @@
 - 截点之后的资料与净值不传给回调。每个回调获得独立账户副本，修改自己的副本不能改真实模拟状态。
 - 保留逐次趋势、候选、选择、融合目标、订单、等待理由、已知信息和账户状态。记录带连续哈希；返回结果仍只是内存工程记录，不能冒称已完成私有持久冻结。
 
+## 冻结上游的离线适配边界
+
+`fundpilot.frozen_topdown` 可以在不重放图、不调用模型、不改变预算的前提下，读取一份已经完成的 stable v2 上游桥接目录。它逐项核对输入哈希、固定上游提交、scope、三组连续请求／响应、prompt 哈希、生成时间、producer 列表以及 `result.json` 中的最终研究文本。只有研究经理返回了完整的 1／5／20 结构化 JSON 时，才会确定性地生成一份 `Trend`；普通文本会关闭失败。
+
+该结果明确标记为 `replayed_frozen_output`。其生成时间可以晚于历史信息截点，因此只是历史开发材料，不是该截点真实可用的独立预测。当前 `run_dynamic` 仍只接受合成回调，这个离线适配器不会绕过该入口限制。
+
+研究经理给出的条件配置讨论不等于最终候选裁决。`load_frozen_research` 因而始终返回 `choice=None`。只有另一组 `fundpilot.final-choice-*.v1` 冻结请求／响应同时绑定 Trend 指纹、完整且有序的 candidate IDs、prompt 哈希、producer、模型标识与实际生成时间，`load_frozen_choice` 才会构造 `Choice`。这只是既有响应的离线验证，不是新的推理证明。
+
 ## 合成动态案例
 
 测试在明确标记的两个合成资产间执行：
@@ -36,6 +44,7 @@
 
 ```bash
 PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_dynamic_topdown.py -v
+PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_frozen_topdown.py -v
 PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 ```
 
@@ -43,7 +52,7 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 
 ## 仍未接通
 
-- 把真实 TradingAgents 研究输出映射为完整、经过核查的统一趋势包，并把最后裁决接到真实宿主响应。原桥接和预算入口未改动。
+- 将离线校验后的冻结 Trend 和独立 Choice 接入经过授权的真实动态运行。当前只完成格式、来源和恢复边界；未执行新模型请求，也未把历史生成内容包装成当时可用预测。原桥接和预算入口未改动。
 - 可运行的不同数学／机器学习／神经网络策略适配器及其训练、输入资格和效果比较。测试中的权重来自明示的合成回调。
 - 通用目标权重到场外基金订单的规划器、逐批费率／取整／限购／QDII 日历和统一硬风险检查。本入口不把现有简化 Rule 的固定费率升级为完整真实执行器。
 - 成熟预测评分、错误归因、经验审查、跨任务恢复、重复运行幂等与私有不可变冻结的端到端连接。
