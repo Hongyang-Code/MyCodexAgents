@@ -26,6 +26,8 @@
 
 研究经理给出的条件配置讨论不等于最终候选裁决。`load_frozen_research` 因而始终返回 `choice=None`。只有另一组 `fundpilot.final-choice-*.v1` 冻结请求／响应同时绑定 Trend 指纹、完整且有序的 candidate IDs、prompt 哈希、producer、模型标识与实际生成时间，`load_frozen_choice` 才会构造 `Choice`。这只是既有响应的离线验证，不是新的推理证明。
 
+`run_frozen_synthetic` 进一步把两种冻结信封接到一次 `run_dynamic` 决策，供复制恢复和端到端回归使用。它只接受一个截点，并要求研究与最终选择的 producer 都是 `synthetic_fixture`；`actual_current_llm` 会关闭失败，不能借该入口绕过真实运行资格。返回值保留两段响应的 prompt/response 哈希、模型标识、生成时间和源文件，并固定 `new_model_inference=false`、`temporal_oos_qualified=false`。测试把完整信封复制到新私密目录后，在独立 Python 进程恢复并核对同一决策摘要。
+
 ## 合成动态案例
 
 测试在明确标记的两个合成资产间执行：
@@ -52,7 +54,7 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 
 ## 仍未接通
 
-- 将离线校验后的冻结 Trend 和独立 Choice 接入经过授权的真实动态运行。当前只完成格式、来源和恢复边界；未执行新模型请求，也未把历史生成内容包装成当时可用预测。原桥接和预算入口未改动。
+- 为经过授权的真实动态运行设计独立入口及预算／时间资格。当前端到端接线仍只接受合成 producer；未执行新模型请求，也未把历史生成内容包装成当时可用预测。原桥接和预算入口未改动。
 - 可运行的不同数学／机器学习／神经网络策略适配器及其训练、输入资格和效果比较。测试中的权重来自明示的合成回调。
 - 通用目标权重到场外基金订单的规划器、逐批费率／取整／限购／QDII 日历和统一硬风险检查。本入口不把现有简化 Rule 的固定费率升级为完整真实执行器。
 - 成熟预测评分、错误归因、经验审查、跨任务恢复、重复运行幂等与私有不可变冻结的端到端连接。
