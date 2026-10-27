@@ -14,7 +14,7 @@ from decimal import Decimal
 import json
 from pathlib import Path
 
-from .dynamic_topdown import Candidate, Choice, Trend, trend_digest
+from .dynamic_topdown import Candidate, Choice, Trend, run_dynamic, trend_digest
 from .upstream_bridge import PIN, SCOPE, checked_time, digest, private_root, read_private
 
 
@@ -207,3 +207,66 @@ def load_frozen_choice(request_path, response_path, trend, candidates):
     provenance = FrozenProvenance(response["producer"], response["model_ref"], generated,
                                   expected_prompt, digest(response_raw), Path(response_path).name)
     return FrozenChoice(choice, provenance)
+
+
+def run_frozen_synthetic(*, research_root, choice_request, choice_response,
+                         initial_cash, rules, cutoffs, end, facts, marks,
+                         generators, plan, settle, initial_shares=None,
+                         initial_events=()):
+    """Replay one complete synthetic frozen decision through ``run_dynamic``.
+
+    The bridge artifacts and final choice must both be ``synthetic_fixture``.
+    This function deliberately cannot run an actual model response: it is a
+    recovery/integration fixture for the offline envelopes, not a live adapter.
+    Historical generation is generally later than its information cutoff, so
+    the returned metadata always keeps temporal/OOS qualification false.
+    """
+    cutoffs = tuple(cutoffs)
+    if len(cutoffs) != 1:
+        raise ValueError("frozen synthetic replay requires exactly one cutoff")
+    research = load_frozen_research(research_root, cutoffs[0])
+    if research.provenance.producer != "synthetic_fixture":
+        raise ValueError("dynamic replay accepts only a synthetic fixture research producer")
+    selected = []
+
+    def predict(view):
+        return research.trend
+
+    def select(view, trend, candidates):
+        frozen = load_frozen_choice(choice_request, choice_response, trend, candidates)
+        if frozen.provenance.producer != "synthetic_fixture":
+            raise ValueError("dynamic replay accepts only a synthetic fixture choice producer")
+        selected.append(frozen)
+        return frozen.choice
+
+    result = run_dynamic(
+        initial_cash=initial_cash, rules=rules, cutoffs=cutoffs, end=end,
+        facts=facts, marks=marks, predict=predict, generators=generators,
+        select=select, plan=plan, settle=settle,
+        initial_shares=initial_shares, initial_events=initial_events,
+        producer="synthetic_fixture")
+    if len(selected) != 1:
+        raise ValueError("exactly one frozen choice must be consumed")
+    result["frozen_replay"] = {
+        "schema": "fundpilot.frozen-synthetic-replay.v1",
+        "replayed_frozen_output": True,
+        "new_model_inference": False,
+        "temporal_oos_qualified": False,
+        "research": {
+            "producer": research.provenance.producer,
+            "model_ref": research.provenance.model_ref,
+            "generated_at": research.provenance.generated_at.isoformat(),
+            "prompt_sha256": research.provenance.prompt_sha256,
+            "response_sha256": research.provenance.response_sha256,
+            "source_file": research.provenance.source_file,
+        },
+        "choice": {
+            "producer": selected[0].provenance.producer,
+            "model_ref": selected[0].provenance.model_ref,
+            "generated_at": selected[0].provenance.generated_at.isoformat(),
+            "prompt_sha256": selected[0].provenance.prompt_sha256,
+            "response_sha256": selected[0].provenance.response_sha256,
+            "source_file": selected[0].provenance.source_file,
+        },
+    }
+    return result
