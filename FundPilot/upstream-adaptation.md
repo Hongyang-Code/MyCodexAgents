@@ -258,3 +258,11 @@ PYTHONPATH=FundPilot /private/ta-venv/bin/python -m fundpilot.upstream_bridge re
 `python -m fundpilot.diagnostic_grant --legacy /private/authority/legacy.sqlite --approval /private/authority/approval.json`只用于有明确人类批准的单次诊断。approval须保存原问答、批准实际时点、出处、唯一approval_id、authority_legacy_path、旧账本SHA256及全部冻结文件路径/哈希；scope严格为llm=12、source=0、evaluations=1、candidate=0。真实批准与这些文件均私有，不复制示例当授权。
 
 权威registry固定在原账本父目录，派生scope账本名由批准ID确定；同一批准只能创建一次。重复执行返回同一已消耗账本，pending/崩溃或缺失账本拒绝重发；复制至其他目录与原批准的canonical路径不一致而拒绝。保留原账本字节、完整候选历史和累计unknown，新scope已用0仅表示该次授权尚未用量，不代表旧用量或token=0。候选、来源和重试操作在此scope禁用；一次diagnostic_evaluation仅在12份请求与12次响应消费完成后允许，仍无融合或投资晋级。注册表/同一账本要求唯一云执行者和可靠本地锁，不提供跨机器多副本互斥、密码学身份签名或隐藏token计量。approval真实性由宿主核实，工具不能替人批准。
+
+## 独立趋势诊断额度迁移
+
+`python -m fundpilot.trend_diagnostic_grant --legacy <权威旧账本> --approval <私有批准记录>`只迁移已明确批准的固定趋势诊断。批准记录必须逐字绑定批准答复、唯一scope ID、三个固定公开样例、1／5／20期限、统一资料截点、权威旧账本路径及SHA256，并为协议和实际输入逐文件记录路径与哈希。它严格接受最多12次模型请求、12次来源尝试、一次固定评价、0结构候选和0交易；已发生的3次来源尝试作为新scope的初始消耗保存，只剩9次，不从空目录或空预留推断为0。
+
+该入口复用权威旧账本旁的同一registry。批准ID决定唯一派生账本；并发领取返回同一账本，claimed状态、账本缺失、绑定变化或复制旧账本到其他目录都会关闭失败。旧累计和账户token仍为unknown，完整候选历史原样嵌入但候选操作禁用。来源及一次瞬时重试共享12次上限；模型请求仍在发布前逐笔预留，响应消费另行预留。只在至少一份响应完成、且每个已预留模型请求都已有对应响应消费时，允许一次固定评价；因此可保留部分样例的missing/pending，但不能遗漏已发请求后抢先评价。旧一次历史对照的12份响应门槛与来源禁用行为保持不变。
+
+此迁移只提供同一主机、同一权威SQLite文件上的原子门禁。它不抓取来源、不生成模型回答、不运行评价、不计量平台token，也不提供跨机器锁。真实批准和权威旧账本不进入Git；缺其中任一项时只能完成合成工程验证，不能创建真实额度或宣称研究已经开始。
