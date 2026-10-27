@@ -76,9 +76,25 @@ def grant(legacy_path, approval_path):
     bindings = approval.get("bindings")
     if not isinstance(bindings, list) or not bindings:
         raise ValueError("frozen protocol/input bindings required")
+    executable_input = False
     for item in bindings:
-        if digest(read_private(item["path"])) != item["sha256"]:
+        raw = read_private(item["path"])
+        if digest(raw) != item["sha256"]:
             raise ValueError("frozen trend diagnostic binding changed")
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        required = ("fund", "information_cutoff", "market_report",
+                    "fundamentals_report")
+        if (isinstance(value, dict)
+                and value.get("fund") in FUNDS
+                and value.get("information_cutoff") == CUTOFF
+                and all(isinstance(value.get(key), str)
+                        and value[key].strip() for key in required)):
+            executable_input = True
+    if not executable_input:
+        raise ValueError("at least one executable frozen evidence input required")
 
     binding = {
         **approval,
