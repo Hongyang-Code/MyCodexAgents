@@ -33,6 +33,7 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 - runner.py：输入驱动的每日编排、失败/部分状态、幂等恢复与成功发布回执；不自带生产资料、审校或存储适配器。
 - storage.py：私有快照校验/安全恢复；云端上传及版本条件替换由已授权工具执行。
 - llm-loop.md / fundpilot/llm_loop.py：真实LLM卡先冻结、再用已核验NAV离线评分的小型CLI；不生成LLM判断，不证明投资效果。
+- [冻结趋势评分与经验接线](trend-feedback.md) / trend_feedback.py：把原桥接判断映射到既有评分器，正确和错误均生成零权重经验候选；不新增预测、补填概率或自动晋级。
 - decision-value.md / fundpilot/decision_value.py：复用会计内核的显式合成决策净价值比较CLI，含现金与买持基线；不支持真实执行收益声明。
 - conditional-value.md / fundpilot/conditional_value.py：独立只读的真实历史NAV与显式LLM分配条件估值，区分期末NAV、假设清算和现金；不放宽原事件门禁。
 - VALIDATION.md：实际测试、真实数据范围和未验收项。
