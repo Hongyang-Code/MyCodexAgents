@@ -29,7 +29,13 @@ class TrendDiagnosticGrantTests(unittest.TestCase):
         protocol = root / "protocol.json"
         evidence = root / "000051.json"
         write_new(protocol, {"synthetic": True, "scope": "trend diagnostic"})
-        write_new(evidence, {"synthetic": True, "fund": "000051/A/CNY"})
+        write_new(evidence, {
+            "synthetic": True,
+            "fund": "000051/A/CNY",
+            "information_cutoff": "2026-07-31T21:30:00+08:00",
+            "market_report": "SYNTHETIC qualified transport input",
+            "fundamentals_report": "SYNTHETIC qualified transport input",
+        })
         approval = root / "approval.json"
         write_new(approval, {
             "approval_id": "SYNTHETIC_TREND_DIAGNOSTIC",
@@ -122,7 +128,7 @@ class TrendDiagnosticGrantTests(unittest.TestCase):
     def test_copy_or_changed_binding_cannot_issue_fresh_quota(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            legacy, approval, evidence = self.fixture(root)
+            legacy, approval, _ = self.fixture(root)
             grant(legacy, approval)
             evidence.write_text("changed")
             with self.assertRaisesRegex(ValueError, "binding"):
@@ -135,6 +141,27 @@ class TrendDiagnosticGrantTests(unittest.TestCase):
             shutil.copy2(legacy, copied / legacy.name)
             with self.assertRaisesRegex(ValueError, "canonical"):
                 grant(copied / legacy.name, approval)
+
+    def test_non_executable_bound_input_is_rejected_before_claim(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            legacy, approval, evidence = self.fixture(root)
+            write_new(root / "batch-manifest.json", {
+                "schema": "fundpilot.trend-diagnostic-input.v1",
+                "funds": ["000051/A/CNY", "004042/A/CNY", "000071/A/CNY"],
+            })
+            data = json.loads(approval.read_text())
+            data["bindings"] = [{
+                "path": str(root / "batch-manifest.json"),
+                "sha256": hashlib.sha256(
+                    (root / "batch-manifest.json").read_bytes()
+                ).hexdigest(),
+            }]
+            approval.unlink()
+            write_new(approval, data)
+            with self.assertRaisesRegex(ValueError, "executable"):
+                grant(legacy, approval)
+            self.assertFalse((root / "diagnostic-grants.sqlite").exists())
 
 
 if __name__ == "__main__":
