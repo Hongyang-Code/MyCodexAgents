@@ -1,22 +1,8 @@
 name: FundPilot cloud verification
 
+# Run GitHub CI only for a deliberate verification milestone.
+# Routine development is tested in the authorized Linux cloud environment.
 on:
-  push:
-    branches:
-      - 'fundpilot/opensource-adaptation-20261024'
-    paths:
-      - 'FundPilot/**'
-      - 'ResearchHotspotFollow/**'
-      - 'TextReadable/**'
-      - 'shared/**'
-      - '.github/workflows/fundpilot-cloud.yml'
-  pull_request:
-    paths:
-      - 'FundPilot/**'
-      - 'ResearchHotspotFollow/**'
-      - 'TextReadable/**'
-      - 'shared/**'
-      - '.github/workflows/fundpilot-cloud.yml'
   workflow_dispatch:
 
 permissions:
