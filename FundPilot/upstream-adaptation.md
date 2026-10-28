@@ -266,3 +266,5 @@ PYTHONPATH=FundPilot /private/ta-venv/bin/python -m fundpilot.upstream_bridge re
 该入口复用权威旧账本旁的同一registry。批准ID决定唯一派生账本；并发领取返回同一账本，claimed状态、账本缺失、绑定变化或复制旧账本到其他目录都会关闭失败。创建registry记录前，全部绑定先核对哈希，且至少一份绑定须是桥接可直接读取的完整证据输入：固定基金、统一截点、非空market_report和fundamentals_report缺一不可；只有批次清单或协议不能领取scope。旧累计和账户token仍为unknown，完整候选历史原样嵌入但候选操作禁用。来源及一次瞬时重试共享12次上限；模型请求仍在发布前逐笔预留，响应消费另行预留。只在至少一份响应完成、且每个已预留模型请求都已有对应响应消费时，允许一次固定评价；因此可保留部分样例的missing/pending，但不能遗漏已发请求后抢先评价。旧一次历史对照的12份响应门槛与来源禁用行为保持不变。
 
 此迁移只提供同一主机、同一权威SQLite文件上的原子门禁。它不抓取来源、不生成模型回答、不运行评价、不计量平台token，也不提供跨机器锁。真实批准和权威旧账本不进入Git；缺其中任一项时只能完成合成工程验证，不能创建真实额度或宣称研究已经开始。
+
+已登记scope可用 `python -m fundpilot.trend_scope_audit --legacy <权威旧账本> --approval <私有批准记录>` 做只读恢复审计。审计逐项核对旧账本、registry、派生账本和全部冻结绑定，不创建或修改文件、不预留预算、不发布请求。只有绑定中至少一份文件本身是桥接可直接读取的完整证据输入时才报告 `ready`；旧scope若只绑定协议或批次清单，报告 `blocked_non_executable_binding`，不能据批次成员、后来生成的文件或Page叙述推导新授权映射。
