@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fundpilot.durable_budget import DurableBudget
 from fundpilot.trend_diagnostic_grant import grant
+from fundpilot.trend_scope_audit import audit
 from fundpilot.upstream_bridge import now, write_new
 
 
@@ -162,6 +163,26 @@ class TrendDiagnosticGrantTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "executable"):
                 grant(legacy, approval)
             self.assertFalse((root / "diagnostic-grants.sqlite").exists())
+
+    def test_ready_scope_audit_is_read_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            legacy, approval, _ = self.fixture(root)
+            budget = grant(legacy, approval)
+            before = {
+                path: path.read_bytes()
+                for path in (legacy, approval, budget.path,
+                             root / "diagnostic-grants.sqlite")
+            }
+            result = audit(legacy, approval)
+            self.assertEqual(result["status"], "ready")
+            self.assertTrue(result["bridge_start_allowed"])
+            self.assertEqual(result["operations"], 0)
+            self.assertEqual(result["audit_mutations"], 0)
+            self.assertEqual(
+                before,
+                {path: path.read_bytes() for path in before},
+            )
 
 
 if __name__ == "__main__":
