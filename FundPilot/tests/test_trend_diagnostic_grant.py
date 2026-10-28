@@ -128,7 +128,7 @@ class TrendDiagnosticGrantTests(unittest.TestCase):
     def test_copy_or_changed_binding_cannot_issue_fresh_quota(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            legacy, approval, _ = self.fixture(root)
+            legacy, approval, evidence = self.fixture(root)
             grant(legacy, approval)
             evidence.write_text("changed")
             with self.assertRaisesRegex(ValueError, "binding"):
