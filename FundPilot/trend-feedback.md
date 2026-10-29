@@ -51,7 +51,7 @@ PYTHONPATH=FundPilot python -m fundpilot.trend_feedback score \
   --frozen /private/evaluation/frozen \
   --nav /private/evaluation/nav.csv \
   --nav-manifest /private/evaluation/nav-manifest.json \
-  --as-of 2026-01-01T00:00:00Z \
+  --as-of "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   --output /private/evaluation/scored
 
 PYTHONPATH=FundPilot python -m fundpilot.trend_feedback feedback \
@@ -59,6 +59,8 @@ PYTHONPATH=FundPilot python -m fundpilot.trend_feedback feedback \
   --scored-root /private/evaluation/scored \
   --output /private/evaluation/feedback
 ```
+
+`score` 的 `--as-of` 必须取真实评分发生时的当前 UTC；不可倒填为更早时间，也不可使用早于 `freeze` 的时间。
 
 `freeze` 生成冻结卡、来源、日历、receipt、原桥接副本及导出 manifest；`score` 生成 `results.json` 和评分 manifest；`feedback` 生成 `feedback.json` 和反馈 manifest。命令会把结果 JSON 写到标准输出，真实运行应同时保留命令日志，但不得提交真实材料。
 
