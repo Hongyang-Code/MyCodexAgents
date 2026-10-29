@@ -43,6 +43,14 @@ class BridgeContractTests(unittest.TestCase):
         self.assertEqual(request['prompt_sha256'],digest(request['prompt'].encode()))
         self.assertEqual(request['funds'],['A','B'])
 
+    def test_multi_fund_manager_request_rejects_reserved_metadata_override(self):
+        at='2026-07-01T13:30:00+00:00'
+        with self.assertRaisesRegex(ValueError,'reserved fields: prompt_sha256'):
+            build_manager_request_v2(prompt_body='Return JSON.',
+                information_cutoff=at,captured_at=at,
+                input_response_sha256=['1'*64,'2'*64],
+                prompt_sha256='0'*64,funds=['A','B'])
+
     def test_upstream_prompt_drift_fails_closed(self):
         with self.assertRaises(ValueError):fund_prompt('bull','unexpected prompt')
         with self.assertRaises(ValueError):fund_prompt('manager','unexpected prompt')

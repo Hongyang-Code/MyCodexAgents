@@ -50,6 +50,14 @@ def prediction_target_contract():
 def build_manager_request_v2(*, prompt_body, information_cutoff,
                              input_response_sha256, captured_at, **metadata):
     """Build a hash-bound multi-fund manager request before model invocation."""
+    reserved = {
+        'schema', 'role', 'information_cutoff', 'input_response_sha256',
+        'prediction_target_contract', 'prompt', 'prompt_sha256', 'captured_at',
+    }
+    overlap = reserved.intersection(metadata)
+    if overlap:
+        raise ValueError('manager request metadata overrides reserved fields: ' +
+                         ', '.join(sorted(overlap)))
     if not isinstance(prompt_body, str) or not prompt_body.strip():
         raise ValueError('nonempty multi-fund manager prompt required')
     if (not isinstance(input_response_sha256, list) or len(input_response_sha256) != 2 or
