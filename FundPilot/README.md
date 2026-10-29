@@ -73,3 +73,7 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 已有真实 stable 研究、外部预算预留、审阅后的 binding／来源／估值日历及 NAV 后，可按[冻结趋势评分与经验接线](trend-feedback.md#cli-使用步骤)依次运行 `trend_feedback freeze`、`score`、`feedback`。CLI 不抓来源、不调用模型、不自行取得预算；输出分别写入新的私有 frozen、scored、feedback 目录。弃权不计正确或错误，缺少截点前连续合格观察时 trend20 保持 pending。当前入口属于有真实失败案例的研究诊断版本，尚未验证动态投资或盈利能力，项目仍未完成。
 
 已经在外部冻结的多截点决策可用 `PYTHONPATH=FundPilot python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 交给现有 `EventSimulator` 做条件历史回放；schema、门禁和现金／条件清算边界见[总—分—总动态回测接线](dynamic-topdown.md#条件历史冻结输入入口)。该入口不调用模型、不重新选择或评分，也不把条件情景称为真实成交。
+
+新研究批次接入该入口时，须保存并提供三研究节点的原始 request／response／result／receipt、统一趋势、决策时完整资金状态、完整候选及不可用原因、独立 choice request／response 与订单意图。严格 conditional replay v2 只在实际核对这些原件且 choice 为 v2 后确认链路完整；结算 tape 独立记录，未来净值或确认／到账价格不属于先前决策输入。旧 v1 仅作 legacy 算术回放；缺原件时状态为 `summary_only_missing_raw`，不得补写或据摘要宣称模型效果。
+
+真正的 hold 保留当时现金和持仓且不发订单；等权或其他建仓必须是显式动作。初始为现金或基金都按实际状态处理，不强制仓位或调仓。缺同步历史的候选明确不可用，固定权重不称最优模型。每基金 1／5／20 估值日预测与长窗口组合扣费净收益分开评价；组合亏损不能判定短期预测错误，未预测的数字／区间不回填，弃权不计错。完整生成与选择是否改善留待下一新授权、预注册批次验证。
