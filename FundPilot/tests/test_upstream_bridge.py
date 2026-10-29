@@ -10,7 +10,8 @@ import sys
 import tempfile
 import unittest
 from fundpilot.upstream_bridge import (PREDICTION_TARGET_CONTRACT,
-    PREDICTION_TARGET_CONTRACT_VERSION, build_manager_request_v2, digest,
+    PREDICTION_TARGET_CONTRACT_VERSION, build_manager_request_v2,
+    build_nav_evidence, digest,
     fund_prompt, write_new)
 from fundpilot.durable_budget import DurableBudget
 
@@ -50,6 +51,48 @@ class BridgeContractTests(unittest.TestCase):
                 information_cutoff=at,captured_at=at,
                 input_response_sha256=['1'*64,'2'*64],
                 prompt_sha256='0'*64,funds=['A','B'])
+
+    def test_complete_nav_evidence_preserves_167_rows_and_features(self):
+        rows=[{'date':f'2020-{1 + i//28:02d}-{1 + i%28:02d}',
+               'nav':str(1 + i/1000)} for i in range(167)]
+        evidence=build_nav_evidence(
+            [{'instrument':'SYNTHETIC/A/CNY','observations':rows}],
+            cutoff='2020-06-27T21:30:00+08:00')
+        fund=evidence['funds'][0]
+        self.assertEqual(fund['provided_observation_count'],167)
+        self.assertEqual(fund['cutoff_observation_count'],167)
+        self.assertEqual(len(fund['observations']),167)
+        self.assertEqual([x['status'] for x in fund['trailing_changes']],
+                         ['available']*3)
+        prompt=fund_prompt('bull','Resources available: X\nUse this information to deliver',evidence)
+        self.assertIn('VALIDATED COMPLETE NAV EVIDENCE',prompt)
+        request=build_manager_request_v2(prompt_body='Return JSON.',
+            information_cutoff='2020-06-27T21:30:00+08:00',
+            captured_at='2020-06-27T21:30:00+08:00',
+            input_response_sha256=['1'*64,'2'*64],nav_evidence=evidence)
+        self.assertIn('"cutoff_observation_count":167',request['prompt'])
+
+    def test_nav_evidence_rejects_duplicate_nonfinite_and_nonpositive(self):
+        base={'instrument':'SYNTHETIC/A/CNY'}
+        bad=([
+            {'date':'2020-01-01','nav':'1'}, {'date':'2020-01-01','nav':'2'}],
+            [{'date':'2020-01-01','nav':'NaN'}],
+            [{'date':'2020-01-01','nav':'0'}])
+        for rows in bad:
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                build_nav_evidence([{**base,'observations':rows}],
+                    cutoff='2020-01-02T00:00:00+00:00')
+
+    def test_short_fund_does_not_suppress_complete_fund(self):
+        full=[{'date':f'2020-01-{i:02d}','nav':str(i)} for i in range(1,23)]
+        short=full[-3:]
+        evidence=build_nav_evidence([
+            {'instrument':'A','observations':full},
+            {'instrument':'B','observations':short}],
+            cutoff='2020-01-22T00:00:00+00:00')
+        self.assertEqual(evidence['synchronized_observation_count'],3)
+        self.assertEqual(evidence['funds'][0]['trailing_changes'][2]['status'],'available')
+        self.assertEqual(evidence['funds'][1]['trailing_changes'][2]['status'],'insufficient')
 
     def test_upstream_prompt_drift_fails_closed(self):
         with self.assertRaises(ValueError):fund_prompt('bull','unexpected prompt')
