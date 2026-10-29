@@ -47,10 +47,19 @@
 ```bash
 PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_dynamic_topdown.py -v
 PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_frozen_topdown.py -v
+PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -p test_conditional_dynamic.py -v
 PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 ```
 
 云端实际结果以该提交的 CI 回执为准，不能提前签认。
+
+## 条件历史冻结输入入口
+
+`python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 接受已经在外部冻结的多截点决策和事件，直接交给现有 `EventSimulator`。它不调用 `run_dynamic`，也不改变 `run_dynamic`／`run_frozen_synthetic` 的 `synthetic_fixture` 门禁；真实响应不能改名为 synthetic。输入必须明确声明 `mode=conditional_historical`、`real_execution_verified=false`，逐截点提供不可变 `decision_ref`、既定 choice 和事件。hold 必须没有事件，adapter 不会为到账后执行偷偷生成 Order。
+
+`event_kernel_attested=true` 只表示调用方愿意让现有 typed kernel 检查这组条件研究事件，不证明真实成交。未知确认／到账历史只能写成预先冻结的情景时间，并在 limitations 保留；不得把情景改写成已核实交易。输出同时分开期末账面估值、可用现金／冻结资金／应收和 `conditional_liquidation_value`，后者固定标记为非已到账现金。
+
+合成回归覆盖两个截点、hold 不生成交易、赎回确认后未到账资金不能申购、条件清算不等于现金，以及 CLI 子进程写出结果。该入口没有重新选择策略、评分或晋级。
 
 ## 仍未接通
 

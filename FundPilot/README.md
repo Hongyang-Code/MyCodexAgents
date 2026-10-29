@@ -71,3 +71,5 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 5. 12个月资格与固定标准由[历史验收工具](historical-acceptance.md)判定；材料不足pending。合成通过、三份响应或短窗回测不证明投资达标，不启现实指导、前瞻或交易。
 
 已有真实 stable 研究、外部预算预留、审阅后的 binding／来源／估值日历及 NAV 后，可按[冻结趋势评分与经验接线](trend-feedback.md#cli-使用步骤)依次运行 `trend_feedback freeze`、`score`、`feedback`。CLI 不抓来源、不调用模型、不自行取得预算；输出分别写入新的私有 frozen、scored、feedback 目录。弃权不计正确或错误，缺少截点前连续合格观察时 trend20 保持 pending。当前入口属于有真实失败案例的研究诊断版本，尚未验证动态投资或盈利能力，项目仍未完成。
+
+已经在外部冻结的多截点决策可用 `PYTHONPATH=FundPilot python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 交给现有 `EventSimulator` 做条件历史回放；schema、门禁和现金／条件清算边界见[总—分—总动态回测接线](dynamic-topdown.md#条件历史冻结输入入口)。该入口不调用模型、不重新选择或评分，也不把条件情景称为真实成交。
