@@ -15,7 +15,9 @@ import json
 from pathlib import Path
 
 from .dynamic_topdown import Candidate, Choice, Trend, run_dynamic, trend_digest
-from .upstream_bridge import PIN, SCOPE, checked_time, digest, private_root, read_private
+from .upstream_bridge import (PIN, SCOPE, PREDICTION_TARGET_CONTRACT,
+                              PREDICTION_TARGET_CONTRACT_VERSION, checked_time,
+                              digest, private_root, read_private)
 
 
 @dataclass(frozen=True)
@@ -264,18 +266,26 @@ def load_complete_comparison_research(layout, expected_cutoff):
     if not isinstance(model_ref, str) or not model_ref.strip():
         raise ValueError("manager model reference missing")
     trend = _complete_manager_trend(response, cutoff, response_sha)
+    contract = request.get("prediction_target_contract")
+    expected_sha = digest(PREDICTION_TARGET_CONTRACT.encode())
+    contract_bound = (isinstance(contract, dict) and
+                      contract.get("version") == PREDICTION_TARGET_CONTRACT_VERSION and
+                      contract.get("sha256") == expected_sha and
+                      contract.get("text") == PREDICTION_TARGET_CONTRACT and
+                      prompt.startswith(PREDICTION_TARGET_CONTRACT + "\n"))
     lower_prompt = prompt.lower()
-    flat_exact = ("flat means exactly zero" in lower_prompt or
-                  "flat=exactly zero" in lower_prompt or
-                  "flat = exactly zero" in lower_prompt)
-    p_up_defined = ("p_up means" in lower_prompt or "p_up=" in lower_prompt)
     semantic = {
-        "complete": flat_exact and p_up_defined,
-        "flat_exact_zero_defined_in_prompt": flat_exact,
-        "p_up_event_and_unit_defined_in_prompt": p_up_defined,
-        "missing": [name for name, present in (
-            ("flat_exact_zero_definition", flat_exact),
-            ("p_up_event_and_unit_definition", p_up_defined)) if not present],
+        "complete": contract_bound,
+        "certification": ("exact_versioned_contract_bound" if contract_bound
+                          else "unknown_unbound_prompt_hints_only"),
+        "contract_version": (PREDICTION_TARGET_CONTRACT_VERSION if contract_bound else None),
+        "contract_sha256": (expected_sha if contract_bound else None),
+        "prompt_hints_not_certification": {
+            "flat_exact_zero_hint": any(value in lower_prompt for value in (
+                "flat means exactly zero", "flat=exactly zero", "flat = exactly zero")),
+            "p_up_definition_hint": ("p_up means" in lower_prompt or "p_up=" in lower_prompt),
+        },
+        "missing": ([] if contract_bound else ["exact_versioned_prediction_target_contract"]),
     }
     return FrozenResearch(
         trend,

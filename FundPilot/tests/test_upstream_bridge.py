@@ -9,7 +9,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from fundpilot.upstream_bridge import fund_prompt, write_new
+from fundpilot.upstream_bridge import (PREDICTION_TARGET_CONTRACT,
+    PREDICTION_TARGET_CONTRACT_VERSION, build_manager_request_v2, digest,
+    fund_prompt, write_new)
 from fundpilot.durable_budget import DurableBudget
 
 def synthetic_budget(root):
@@ -25,6 +27,21 @@ class BridgeContractTests(unittest.TestCase):
         self.assertNotIn('stock growth potential',text)
         self.assertIn('NAV-internal',text)
         self.assertIn('unknown-price',text)
+        self.assertIn(PREDICTION_TARGET_CONTRACT,text)
+        self.assertIn('flat only when R = 0',text)
+        self.assertIn('abstain means evidence is insufficient and is not flat',text)
+
+    def test_multi_fund_manager_request_binds_exact_prediction_contract(self):
+        at='2026-07-01T13:30:00+00:00'
+        request=build_manager_request_v2(prompt_body='Return the multi-fund JSON.',
+            information_cutoff=at,captured_at=at,
+            input_response_sha256=['1'*64,'2'*64],funds=['A','B'])
+        contract=request['prediction_target_contract']
+        self.assertEqual(contract['version'],PREDICTION_TARGET_CONTRACT_VERSION)
+        self.assertEqual(contract['sha256'],digest(PREDICTION_TARGET_CONTRACT.encode()))
+        self.assertTrue(request['prompt'].startswith(PREDICTION_TARGET_CONTRACT+'\n'))
+        self.assertEqual(request['prompt_sha256'],digest(request['prompt'].encode()))
+        self.assertEqual(request['funds'],['A','B'])
 
     def test_upstream_prompt_drift_fails_closed(self):
         with self.assertRaises(ValueError):fund_prompt('bull','unexpected prompt')

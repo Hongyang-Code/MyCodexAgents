@@ -12,7 +12,8 @@ from fundpilot.backtest import State
 from fundpilot.conditional_dynamic import _order_intents, replay
 from fundpilot.dynamic_topdown import Candidate, trend_digest
 from fundpilot.frozen_topdown import build_choice_request, load_frozen_research
-from fundpilot.upstream_bridge import PIN, SCOPE, digest, write_new
+from fundpilot.upstream_bridge import (PIN, SCOPE, build_manager_request_v2,
+                                       digest, write_new)
 
 
 def fixture():
@@ -214,9 +215,35 @@ class ConditionalDynamicTests(unittest.TestCase):
             self.assertTrue(result["decisions"][0]["provider_time_unknown"])
             semantic = result["decisions"][0]["semantic_contract_status"]
             self.assertFalse(semantic["complete"])
+            self.assertEqual(semantic["certification"],
+                             "unknown_unbound_prompt_hints_only")
             self.assertEqual(
                 semantic["missing"],
-                ["flat_exact_zero_definition", "p_up_event_and_unit_definition"])
+                ["exact_versioned_prediction_target_contract"])
+
+    def test_complete_comparison_exact_contract_is_certified(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = complete_case_v2(root)
+            layout = value["decisions"][0]["artifacts"]["research"]
+            request_path = Path(layout["manager_request"])
+            receipt_path = Path(layout["manager_receipt"])
+            old = json.loads(request_path.read_text())
+            request = build_manager_request_v2(
+                prompt_body="Return the same synthetic multi-fund JSON.",
+                information_cutoff=old["information_cutoff"],
+                input_response_sha256=old["input_response_sha256"],
+                captured_at=old["captured_at"])
+            request_path.unlink(); write_new(request_path, request)
+            receipt = json.loads(receipt_path.read_text())
+            receipt.update(request_sha256=digest(request_path.read_bytes()),
+                           prompt_sha256=request["prompt_sha256"])
+            receipt_path.unlink(); write_new(receipt_path, receipt)
+            result = replay(value)
+            semantic = result["decisions"][0]["semantic_contract_status"]
+            self.assertTrue(semantic["complete"])
+            self.assertEqual(semantic["certification"],
+                             "exact_versioned_contract_bound")
 
     def test_complete_comparison_layout_rejects_changed_raw_response(self):
         with tempfile.TemporaryDirectory() as td:
