@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import os
 
-from fundpilot.conditional_dynamic import replay
+from fundpilot.conditional_dynamic import _digest, replay
 
 
 def fixture():
@@ -41,7 +41,48 @@ def fixture():
             "liquidation_rule_ids": {"A": "r-A"}, "limitations": ["SYNTHETIC"]}
 
 
+def bind_v2(value):
+    value["schema"] = "fundpilot.conditional-dynamic-replay.v2"
+    states = [
+        {"cash": "100", "reserved_cash": "0", "receivables": {}, "shares": {}},
+        {"cash": "0", "reserved_cash": "0", "receivables": {}, "shares": {"A": "100"}},
+    ]
+    for index, row in enumerate(value["decisions"]):
+        context = {
+            "expected_state_before": states[index],
+            "research": {"target_instruments": ["A", "B"], "horizons": [1, 5, 20],
+                         "response_sha256s": [str(n) * 64 for n in (1, 2, 3)]},
+            "candidates": [
+                {"candidate_id": "hold", "semantics": "retain_current_state"},
+                {"candidate_id": "target", "semantics": "explicit_target"}],
+            "selected_candidate_id": row["choice"],
+            "choice_response_sha256": str(index + 4) * 64,
+        }
+        context["context_sha256"] = _digest(context)
+        row["decision_context"] = context
+    return value
+
+
 class ConditionalDynamicTests(unittest.TestCase):
+    def test_v2_binds_research_candidates_choice_and_actual_state(self):
+        value = bind_v2(fixture())
+        result = replay(value)
+        self.assertTrue(result["decision_context_bound"])
+        self.assertTrue(all(row["decision_context_sha256"] for row in result["decisions"]))
+        value = bind_v2(fixture())
+        value["decisions"][0]["decision_context"]["expected_state_before"]["cash"] = "99"
+        with self.assertRaisesRegex(ValueError, "state"):
+            replay(value)
+
+    def test_v2_rejects_hold_relabel_after_choice(self):
+        value = bind_v2(fixture())
+        context = value["decisions"][0]["decision_context"]
+        context["candidates"][0]["semantics"] = "buy_50_50"
+        context["context_sha256"] = _digest(
+            {key: item for key, item in context.items() if key != "context_sha256"})
+        with self.assertRaisesRegex(ValueError, "retain_current_state"):
+            replay(value)
+
     def test_two_cutoffs_hold_and_conditional_liquidation_are_distinct(self):
         result = replay(fixture())
         self.assertEqual([row["choice"] for row in result["decisions"]], ["target", "hold"])
@@ -50,6 +91,7 @@ class ConditionalDynamicTests(unittest.TestCase):
         self.assertEqual(result["conditional_liquidation_value"], "108.900")
         self.assertFalse(result["conditional_liquidation_is_settled_cash"])
         self.assertFalse(result["real_execution_verified"])
+        self.assertTrue(result["legacy_unbound_decision_context"])
 
     def test_hold_cannot_hide_an_order(self):
         value = fixture(); value["decisions"][1]["events"] = value["decisions"][0]["events"][:1]

@@ -46,6 +46,18 @@ except (ValueError,OSError) as e:
             self.assertEqual(sum(x.get('status')=='skip_partial' for x in r),1)
             self.assertEqual(len(b.snapshot()['operations']),12)
 
+    def test_source_callback_cannot_run_after_cap_or_duplicate(self):
+        with tempfile.TemporaryDirectory() as td:
+            b=self.make(td);called=[]
+            for index in range(12):
+                self.assertIsNone(b.run_source_attempt(
+                    str(index),lambda i=index:called.append(i)))
+            with self.assertRaisesRegex(ValueError,'skip_partial'):
+                b.run_source_attempt('overflow',lambda:called.append('overflow'))
+            with self.assertRaisesRegex(ValueError,'already_reserved'):
+                b.run_source_attempt('0',lambda:called.append('duplicate'))
+            self.assertEqual(called,list(range(12)))
+
     def test_crash_after_reservation_keeps_consumption_and_stop_survives_restart(self):
         with tempfile.TemporaryDirectory() as td:
             b=self.make(td)

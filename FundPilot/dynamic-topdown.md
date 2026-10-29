@@ -24,7 +24,7 @@
 
 该结果明确标记为 `replayed_frozen_output`。其生成时间可以晚于历史信息截点，因此只是历史开发材料，不是该截点真实可用的独立预测。当前 `run_dynamic` 仍只接受合成回调，这个离线适配器不会绕过该入口限制。
 
-研究经理给出的条件配置讨论不等于最终候选裁决。`load_frozen_research` 因而始终返回 `choice=None`。只有另一组 `fundpilot.final-choice-*.v1` 冻结请求／响应同时绑定 Trend 指纹、完整且有序的 candidate IDs、prompt 哈希、producer、模型标识与实际生成时间，`load_frozen_choice` 才会构造 `Choice`。这只是既有响应的离线验证，不是新的推理证明。
+研究经理给出的条件配置讨论不等于最终候选裁决。`load_frozen_research` 因而始终返回 `choice=None`。现有 `fundpilot.final-choice-*.v1` 只绑定 Trend 指纹、candidate IDs、prompt 哈希、producer、模型标识与实际生成时间；它尚未绑定同 ID 候选的权重／费用风险表和当时账户状态。因此它只能验证既有响应信封，不能证明候选内容或状态没有被替换。该缺口不得用改名掩盖。
 
 `run_frozen_synthetic` 进一步把两种冻结信封接到一次 `run_dynamic` 决策，供复制恢复和端到端回归使用。它只接受一个截点，并要求研究与最终选择的 producer 都是 `synthetic_fixture`；`actual_current_llm` 会关闭失败，不能借该入口绕过真实运行资格。返回值保留两段响应的 prompt/response 哈希、模型标识、生成时间和源文件，并固定 `new_model_inference=false`、`temporal_oos_qualified=false`。测试把完整信封复制到新私密目录后，在独立 Python 进程恢复并核对同一决策摘要。
 
@@ -57,11 +57,15 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 
 `python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 接受已经在外部冻结的多截点决策和事件，直接交给现有 `EventSimulator`。它不调用 `run_dynamic`，也不改变 `run_dynamic`／`run_frozen_synthetic` 的 `synthetic_fixture` 门禁；真实响应不能改名为 synthetic。输入必须明确声明 `mode=conditional_historical`、`real_execution_verified=false`，逐截点提供不可变 `decision_ref`、既定 choice 和事件。hold 必须没有事件，adapter 不会为到账后执行偷偷生成 Order。
 
+新输入应使用 `fundpilot.conditional-dynamic-replay.v2`。每个决策把实际看到的现金、冻结现金、应收和份额，与三份研究响应哈希、明确的 1／5／20 目标、完整候选身份、最终选择响应哈希绑定在一个 context digest 中；候选集必须包含真正的 `hold=retain_current_state`。这样，初始状态为现金时选择 hold 就只能保留现金，不能把 50/50 买入改名成“保持”。旧 v1 文件仍可复现原数值，但输出明确标记 `legacy_unbound_decision_context=true`，不签认研究、状态、候选和选择已经连接。
+
 `event_kernel_attested=true` 只表示调用方愿意让现有 typed kernel 检查这组条件研究事件，不证明真实成交。未知确认／到账历史只能写成预先冻结的情景时间，并在 limitations 保留；不得把情景改写成已核实交易。每个截点前只推进队列中不晚于该截点的结算，当前冻结决策只能提交自己的 Order，未来非 Order 事件入队；到明确 `end_at` 后仍未发生的事件保留 pending。输出同时分开期末账面估值、可用现金／冻结资金／应收和 `conditional_liquidation_value`，后者固定标记为非已到账现金。条件清算规则必须与资产一致，并在明确 `liquidation_at` 仍生效、已可用。
 
 CLI 的输入和输出必须位于 checkout 外、由当前用户拥有且组／其他用户无权限的私有目录。输入按私有普通文件读取；输出使用 `0600` exclusive create，既有路径和符号链接均拒绝，不先检查再覆盖。
 
 合成回归覆盖两个截点、hold 不生成交易、赎回确认后未到账资金不能申购、条件清算不等于现金，以及 CLI 子进程写出结果。该入口没有重新选择策略、评分或晋级。
+
+所有来源查询、打开与重试必须逐次通过 `DurableBudget.run_source_attempt`：先持久预扣，成功后才调用一次外部动作。达到上限或重复 operation ID 时，回调不会执行。该机械入口不恢复已经超额的预算，也不授权新的来源请求。
 
 ## 仍未接通
 

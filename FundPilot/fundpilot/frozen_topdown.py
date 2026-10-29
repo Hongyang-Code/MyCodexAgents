@@ -8,7 +8,7 @@ downstream candidate choice.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 import json
@@ -41,6 +41,33 @@ class FrozenResearch:
 class FrozenChoice:
     choice: Choice
     provenance: FrozenProvenance
+
+
+def _plain(value):
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
+def _binding_digest(value):
+    return digest(json.dumps(_plain(value), ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"), allow_nan=False).encode())
+
+
+def choice_context(candidates, state):
+    """Immutable selector inputs for v2 choice envelopes."""
+    return {
+        "candidate_digest": _binding_digest([asdict(candidate) for candidate in candidates]),
+        "state_digest": _binding_digest({
+            "cash": state.cash, "reserved_cash": state.reserved_cash,
+            "receivables": state.receivables, "shares": state.shares}),
+    }
 
 
 def _object(raw, label):
@@ -170,13 +197,20 @@ def load_frozen_research(root, expected_cutoff):
     return FrozenResearch(trend, provenance)
 
 
-def load_frozen_choice(request_path, response_path, trend, candidates):
+def load_frozen_choice(request_path, response_path, trend, candidates, state=None):
     """Validate a distinct final-selection envelope; never reuse manager prose."""
     request_raw = read_private(request_path); response_raw = read_private(response_path)
     request = _object(request_raw, "choice request"); response = _object(response_raw, "choice response")
-    if request.get("schema") != "fundpilot.final-choice-request.v1" or response.get("schema") != "fundpilot.final-choice-response.v1":
+    schema = request.get("schema")
+    if (schema not in ("fundpilot.final-choice-request.v1", "fundpilot.final-choice-request.v2")
+            or response.get("schema") != schema.replace("request", "response")):
         raise ValueError("final choice schema mismatch")
-    unsigned = {key: request[key] for key in ("schema", "trend_digest", "candidate_ids") if key in request}
+    fields = ["schema", "trend_digest", "candidate_ids"]
+    if schema.endswith(".v2"):
+        if state is None:
+            raise ValueError("v2 final choice requires current state")
+        fields += ["candidate_digest", "state_digest"]
+    unsigned = {key: request[key] for key in fields if key in request}
     expected_prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
     if request.get("prompt_sha256") != expected_prompt or response.get("prompt_sha256") != expected_prompt:
         raise ValueError("final choice prompt binding mismatch")
@@ -185,6 +219,10 @@ def load_frozen_choice(request_path, response_path, trend, candidates):
     candidate_ids = [candidate.candidate_id for candidate in candidates]
     if request.get("candidate_ids") != candidate_ids or len(candidate_ids) != len(set(candidate_ids)):
         raise ValueError("final choice candidate binding mismatch")
+    if schema.endswith(".v2"):
+        expected = choice_context(candidates, state)
+        if any(request.get(key) != value for key, value in expected.items()):
+            raise ValueError("final choice candidate content or state binding mismatch")
     if response.get("producer") not in ("actual_current_llm", "synthetic_fixture") or not response.get("model_ref"):
         raise ValueError("final choice producer mismatch")
     generated = checked_time(response.get("generated_at", "")); captured = checked_time(request.get("captured_at", ""))
@@ -238,7 +276,7 @@ def run_frozen_synthetic(*, research_root, choice_request, choice_response,
         return research.trend
 
     def select(view, trend, candidates):
-        frozen = load_frozen_choice(choice_request, choice_response, trend, candidates)
+        frozen = load_frozen_choice(choice_request, choice_response, trend, candidates, view.state)
         if frozen.provenance.producer != "synthetic_fixture":
             raise ValueError("dynamic replay accepts only a synthetic fixture choice producer")
         selected.append(frozen)

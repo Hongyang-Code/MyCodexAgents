@@ -21,6 +21,7 @@ from .upstream_bridge import read_private, write_bytes_new
 
 D = Decimal
 ZERO = D("0")
+HEX = set("0123456789abcdef")
 
 
 def _time(value):
@@ -52,6 +53,62 @@ def _digest(value):
     return hashlib.sha256(raw).hexdigest()
 
 
+def _state_payload(state):
+    return _plain({"cash": state.cash, "reserved_cash": state.reserved_cash,
+                   "receivables": state.receivables, "shares": state.shares})
+
+
+def _sha(value, label):
+    if not isinstance(value, str) or len(value) != 64 or set(value) - HEX:
+        raise ValueError(f"{label} must be a lowercase SHA256")
+    return value
+
+
+def _decision_context(row, state, instruments):
+    """Bind research, candidates, choice and the state actually seen."""
+    context = row.get("decision_context")
+    if not isinstance(context, dict):
+        raise ValueError("v2 decision_context required")
+    expected = context.get("expected_state_before")
+    actual = _state_payload(state)
+    if expected != actual:
+        raise ValueError("decision context state does not match replay state")
+    research = context.get("research")
+    if not isinstance(research, dict):
+        raise ValueError("decision research binding required")
+    targets = research.get("target_instruments")
+    if (not isinstance(targets, list) or not targets or len(targets) != len(set(targets))
+            or not set(targets) <= instruments):
+        raise ValueError("decision research instruments must match replay instruments")
+    if research.get("horizons") != [1, 5, 20]:
+        raise ValueError("decision research must preserve 1/5/20 targets")
+    responses = research.get("response_sha256s")
+    if not isinstance(responses, list) or len(responses) != 3:
+        raise ValueError("exactly three frozen research response hashes required")
+    for value in responses:
+        _sha(value, "research response")
+    candidates = context.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("frozen candidate set required")
+    ids = [item.get("candidate_id") for item in candidates if isinstance(item, dict)]
+    if len(ids) != len(candidates) or any(not isinstance(x, str) or not x for x in ids):
+        raise ValueError("candidate identities required")
+    if len(ids) != len(set(ids)) or "hold" not in ids:
+        raise ValueError("unique candidates including hold required")
+    hold = candidates[ids.index("hold")]
+    if hold.get("semantics") != "retain_current_state":
+        raise ValueError("hold must mean retain_current_state")
+    selected = context.get("selected_candidate_id")
+    if selected not in ids or selected != row.get("choice"):
+        raise ValueError("selected candidate must bind the frozen choice")
+    _sha(context.get("choice_response_sha256"), "choice response")
+    supplied = _sha(context.get("context_sha256"), "decision context")
+    body = {key: value for key, value in context.items() if key != "context_sha256"}
+    if supplied != _digest(body):
+        raise ValueError("decision context hash mismatch")
+    return supplied
+
+
 def _rule(row):
     return Rule(row["rule_id"], row["instrument"], _time(row["effective_from"]),
                 _time(row["effective_to"]), _time(row["published_at"]),
@@ -77,7 +134,9 @@ def _event(row, cutoff):
 
 def replay(payload):
     """Replay one already-frozen conditional case, without selecting again."""
-    if payload.get("schema") != "fundpilot.conditional-dynamic-replay.v1":
+    schema = payload.get("schema")
+    if schema not in ("fundpilot.conditional-dynamic-replay.v1",
+                      "fundpilot.conditional-dynamic-replay.v2"):
         raise ValueError("conditional replay schema required")
     if payload.get("mode") != "conditional_historical":
         raise ValueError("explicit conditional_historical mode required")
@@ -87,6 +146,7 @@ def replay(payload):
         raise ValueError("conditional replay must not claim real execution")
     rules = tuple(_rule(row) for row in payload["rules"])
     rule_by_id = {rule.rule_id: rule for rule in rules}
+    instruments = {rule.instrument for rule in rules}
     sim = EventSimulator(D(payload["initial_cash"]), rules,
                          {key: D(value) for key, value in payload.get("initial_shares", {}).items()})
     decisions = payload.get("decisions")
@@ -127,6 +187,8 @@ def replay(payload):
             raise ValueError("hold decision cannot introduce events")
         advance(cutoff)
         before = sim.state
+        context_sha = (_decision_context(row, before, instruments)
+                       if schema.endswith(".v2") else None)
         orders, scheduled = [], []
         for raw in events:
             event = _event(raw, cutoff)
@@ -142,10 +204,8 @@ def replay(payload):
             "cutoff": cutoff.isoformat(), "decision_ref": row["decision_ref"],
             "choice": row["choice"], "reason": row.get("reason", ""),
             "orders": orders, "scheduled_settlements": scheduled,
-            "state_before": _plain({"cash": before.cash,
-                                     "reserved_cash": before.reserved_cash,
-                                     "receivables": before.receivables,
-                                     "shares": before.shares}),
+            "state_before": _state_payload(before),
+            "decision_context_sha256": context_sha,
             "state_after_orders": _plain({"cash": sim.state.cash,
                                            "reserved_cash": sim.state.reserved_cash,
                                            "receivables": sim.state.receivables,
@@ -184,6 +244,8 @@ def replay(payload):
         "temporal_oos_qualified": False, "investment_qualified": False,
         "event_kernel_attested": True,
         "event_kernel_attestation_scope": "conditional_internal_consistency_only",
+        "decision_context_bound": schema.endswith(".v2"),
+        "legacy_unbound_decision_context": schema.endswith(".v1"),
         "end_at": end_at.isoformat(), "liquidation_at": liquidation_at.isoformat(),
         "decisions": trace, "applied_settlements": applied_settlements,
         "terminal_state": _plain(state.__dict__),
