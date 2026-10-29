@@ -144,9 +144,17 @@ class ActualUpstreamGraphTests(unittest.TestCase):
             self.assertEqual(json.loads((out/'receipt.json').read_text())['input_sha256'],hashlib.sha256(raw).hexdigest())
             for i,role in enumerate(('bull','bear','manager'),1):
                 q=json.loads((out/f'request-{i}.json').read_text());self.assertEqual(q['role'],role)
-                self.assertIn('VALIDATED COMPLETE NAV EVIDENCE',q['prompt'])
-                self.assertIn('"cutoff_observation_count":167',q['prompt'])
-                self.assertIn('"horizon":20',q['prompt'])
+                marker='VALIDATED COMPLETE NAV EVIDENCE:\n'
+                self.assertIn(marker,q['prompt'])
+                embedded=json.loads(q['prompt'].split(marker,1)[1])
+                saved=embedded['funds'][0]
+                self.assertEqual(len(saved['observations']),167)
+                self.assertEqual(saved['observations'][0],nav[0])
+                self.assertEqual(saved['observations'][-1],nav[-1])
+                h20=next(x for x in saved['trailing_changes'] if x['horizon']==20)
+                self.assertEqual(h20['window_observations'],21)
+                self.assertEqual(h20['start'],nav[-21])
+                self.assertEqual(h20['end'],nav[-1])
                 r=root/f'answer{i}.json';r.write_text(json.dumps({'producer':'synthetic_fixture',
                     'model_ref':'SYNTHETIC_NOT_LLM','generated_at':datetime.now(timezone.utc).isoformat(),
                     'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC response only'}))
