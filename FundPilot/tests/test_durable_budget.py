@@ -58,6 +58,16 @@ except (ValueError,OSError) as e:
                 b.run_source_attempt('0',lambda:called.append('duplicate'))
             self.assertEqual(called,list(range(12)))
 
+    def test_throwing_source_callback_still_consumes_reservation(self):
+        with tempfile.TemporaryDirectory() as td:
+            b=self.make(td)
+            def fail():
+                raise RuntimeError('synthetic source failure')
+            with self.assertRaisesRegex(RuntimeError, 'synthetic source failure'):
+                b.run_source_attempt('throws', fail)
+            self.assertEqual(b.reserve('throws', 'source'), 'already_reserved_do_not_execute')
+            self.assertEqual(len(b.snapshot()['operations']), 1)
+
     def test_crash_after_reservation_keeps_consumption_and_stop_survives_restart(self):
         with tempfile.TemporaryDirectory() as td:
             b=self.make(td)

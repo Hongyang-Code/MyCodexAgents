@@ -6,8 +6,13 @@ import sys
 import tempfile
 import unittest
 import os
+from decimal import Decimal
 
-from fundpilot.conditional_dynamic import _digest, replay
+from fundpilot.backtest import State
+from fundpilot.conditional_dynamic import replay
+from fundpilot.dynamic_topdown import Candidate, trend_digest
+from fundpilot.frozen_topdown import choice_context, load_frozen_research
+from fundpilot.upstream_bridge import PIN, SCOPE, digest, write_new
 
 
 def fixture():
@@ -41,47 +46,112 @@ def fixture():
             "liquidation_rule_ids": {"A": "r-A"}, "limitations": ["SYNTHETIC"]}
 
 
-def bind_v2(value):
+def _research(root, cutoff):
+    root.mkdir(mode=0o700)
+    raw = json.dumps({"fund": "SYNTHETIC", "information_cutoff": cutoff,
+                      "market_report": "SYNTHETIC", "fundamentals_report": "SYNTHETIC"}).encode()
+    (root / "input.json").write_bytes(raw); (root / "input.json").chmod(0o600)
+    write_new(root / "receipt.json", {"bridge_schema": 2, "graph_mode": "stable",
+              "input_sha256": digest(raw), "upstream_sha": PIN, **SCOPE})
+    manager = json.dumps({"forecasts": [
+        {"horizon": h, "direction": "flat", "p_up": None, "rationale": "fixture",
+         "counterevidence": "fixture", "invalidation": "fixture", "gaps": "fixture"}
+        for h in (1, 5, 20)]})
+    contents = ("bull fixture", "bear fixture", manager)
+    for index, (role, content) in enumerate(zip(("bull", "bear", "manager"), contents), 1):
+        prompt = "prompt-" + role; prompt_sha = digest(prompt.encode())
+        write_new(root / f"request-{index}.json", {"role": role, "prompt": prompt,
+                  "prompt_sha256": prompt_sha, "captured_at": "2026-10-27T00:00:00+00:00",
+                  **SCOPE})
+        write_new(root / f"response-{index}.json", {"producer": "synthetic_fixture",
+                  "model_ref": "SYNTHETIC_NOT_LLM", "generated_at": "2026-10-27T00:00:01+00:00",
+                  "prompt_sha256": prompt_sha, "content": content})
+    write_new(root / "result.json", {**SCOPE, "upstream_sha": PIN,
+              "completed_at": "2026-10-27T00:00:02+00:00", "bridge_responses": 3,
+              "response_producers": ["synthetic_fixture"] * 3,
+              "research_state": {"investment_plan": manager}})
+
+
+def bind_v2(value, root):
     value["schema"] = "fundpilot.conditional-dynamic-replay.v2"
     states = [
         {"cash": "100", "reserved_cash": "0", "receivables": {}, "shares": {}},
         {"cash": "0", "reserved_cash": "0", "receivables": {}, "shares": {"A": "100"}},
     ]
     for index, row in enumerate(value["decisions"]):
-        context = {
-            "expected_state_before": states[index],
-            "research": {"target_instruments": ["A", "B"], "horizons": [1, 5, 20],
-                         "response_sha256s": [str(n) * 64 for n in (1, 2, 3)]},
-            "candidates": [
-                {"candidate_id": "hold", "semantics": "retain_current_state"},
-                {"candidate_id": "target", "semantics": "explicit_target"}],
-            "selected_candidate_id": row["choice"],
-            "choice_response_sha256": str(index + 4) * 64,
-        }
-        context["context_sha256"] = _digest(context)
-        row["decision_context"] = context
+        graph = root / f"graph-{index}"; _research(graph, row["cutoff"])
+        frozen = load_frozen_research(graph, __import__("datetime").datetime.fromisoformat(row["cutoff"]))
+        candidates = (
+            Candidate("hold", trend_digest(frozen.trend), None, "retain current state"),
+            Candidate("target", trend_digest(frozen.trend), (("A", Decimal("1")),), "explicit target"))
+        state = State(cash=Decimal(states[index]["cash"]),
+                      reserved_cash=Decimal(states[index]["reserved_cash"]),
+                      shares={k: Decimal(v) for k, v in states[index]["shares"].items()})
+        envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
+                    "events": row.get("events", [])}
+        unsigned = {"schema": "fundpilot.final-choice-request.v2",
+                    "trend_digest": trend_digest(frozen.trend),
+                    "candidate_ids": ["hold", "target"],
+                    **choice_context(candidates, state, envelope)}
+        prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
+        request = root / f"choice-request-{index}.json"
+        response = root / f"choice-response-{index}.json"
+        write_new(request, {**unsigned, "prompt_sha256": prompt,
+                            "captured_at": "2026-10-27T00:00:03+00:00"})
+        write_new(response, {"schema": "fundpilot.final-choice-response.v2",
+                  "producer": "synthetic_fixture", "model_ref": "SYNTHETIC_NOT_LLM",
+                  "generated_at": "2026-10-27T00:00:04+00:00", "prompt_sha256": prompt,
+                  "components": [{"candidate_id": row["choice"], "weight": "1"}],
+                  "reason": "fixture"})
+        row["candidates"] = [
+            {"candidate_id": "hold", "target_weights": None, "reason": "retain current state"},
+            {"candidate_id": "target", "target_weights": [["A", "1"]],
+             "reason": "explicit target"}]
+        row["artifacts"] = {"research_root": str(graph), "choice_request": str(request),
+                            "choice_response": str(response)}
     return value
 
 
 class ConditionalDynamicTests(unittest.TestCase):
     def test_v2_binds_research_candidates_choice_and_actual_state(self):
-        value = bind_v2(fixture())
-        result = replay(value)
-        self.assertTrue(result["decision_context_bound"])
-        self.assertTrue(all(row["decision_context_sha256"] for row in result["decisions"]))
-        value = bind_v2(fixture())
-        value["decisions"][0]["decision_context"]["expected_state_before"]["cash"] = "99"
-        with self.assertRaisesRegex(ValueError, "state"):
-            replay(value)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = bind_v2(fixture(), root)
+            result = replay(value)
+            self.assertTrue(result["decision_context_bound"])
+            self.assertTrue(result["saved_artifacts_verified"])
+            self.assertTrue(all(row["decision_context_sha256"] for row in result["decisions"]))
 
-    def test_v2_rejects_hold_relabel_after_choice(self):
-        value = bind_v2(fixture())
-        context = value["decisions"][0]["decision_context"]
-        context["candidates"][0]["semantics"] = "buy_50_50"
-        context["context_sha256"] = _digest(
-            {key: item for key, item in context.items() if key != "context_sha256"})
-        with self.assertRaisesRegex(ValueError, "retain_current_state"):
-            replay(value)
+    def test_v2_rejects_missing_or_forged_artifact(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = bind_v2(fixture(), root)
+            Path(value["decisions"][0]["artifacts"]["choice_response"]).unlink()
+            with self.assertRaises((OSError, ValueError)):
+                replay(value)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = bind_v2(fixture(), root)
+            response = Path(value["decisions"][0]["artifacts"]["choice_response"])
+            obj = json.loads(response.read_text()); obj["prompt_sha256"] = "1" * 64
+            response.write_text(json.dumps(obj)); response.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "prompt binding"):
+                replay(value)
+
+    def test_v2_rejects_same_id_weight_cutoff_or_event_change(self):
+        for mutation in ("weight", "cutoff", "event"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                root = Path(td); os.chmod(root, 0o700)
+                value = bind_v2(fixture(), root)
+                if mutation == "weight":
+                    value["decisions"][0]["candidates"][1]["target_weights"] = [["A", ".5"], ["B", ".5"]]
+                elif mutation == "cutoff":
+                    value["decisions"][0]["cutoff"] = "2020-01-02T00:00:01+00:00"
+                    value["decisions"][0]["events"][0]["at"] = value["decisions"][0]["cutoff"]
+                else:
+                    value["decisions"][0]["events"][0]["quantity"] = "99"
+                with self.assertRaises(ValueError):
+                    replay(value)
 
     def test_two_cutoffs_hold_and_conditional_liquidation_are_distinct(self):
         result = replay(fixture())

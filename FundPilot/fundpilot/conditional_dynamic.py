@@ -17,11 +17,12 @@ import json
 from pathlib import Path
 
 from .backtest import Confirmation, EventSimulator, Order, Receipt, Rule
+from .dynamic_topdown import Candidate, trend_digest
+from .frozen_topdown import load_frozen_choice, load_frozen_research
 from .upstream_bridge import read_private, write_bytes_new
 
 D = Decimal
 ZERO = D("0")
-HEX = set("0123456789abcdef")
 
 
 def _time(value):
@@ -58,55 +59,59 @@ def _state_payload(state):
                    "receivables": state.receivables, "shares": state.shares})
 
 
-def _sha(value, label):
-    if not isinstance(value, str) or len(value) != 64 or set(value) - HEX:
-        raise ValueError(f"{label} must be a lowercase SHA256")
-    return value
-
-
-def _decision_context(row, state, instruments):
-    """Bind research, candidates, choice and the state actually seen."""
-    context = row.get("decision_context")
-    if not isinstance(context, dict):
-        raise ValueError("v2 decision_context required")
-    expected = context.get("expected_state_before")
-    actual = _state_payload(state)
-    if expected != actual:
-        raise ValueError("decision context state does not match replay state")
-    research = context.get("research")
-    if not isinstance(research, dict):
-        raise ValueError("decision research binding required")
-    targets = research.get("target_instruments")
-    if (not isinstance(targets, list) or not targets or len(targets) != len(set(targets))
-            or not set(targets) <= instruments):
-        raise ValueError("decision research instruments must match replay instruments")
-    if research.get("horizons") != [1, 5, 20]:
-        raise ValueError("decision research must preserve 1/5/20 targets")
-    responses = research.get("response_sha256s")
-    if not isinstance(responses, list) or len(responses) != 3:
-        raise ValueError("exactly three frozen research response hashes required")
-    for value in responses:
-        _sha(value, "research response")
-    candidates = context.get("candidates")
-    if not isinstance(candidates, list) or not candidates:
-        raise ValueError("frozen candidate set required")
-    ids = [item.get("candidate_id") for item in candidates if isinstance(item, dict)]
-    if len(ids) != len(candidates) or any(not isinstance(x, str) or not x for x in ids):
-        raise ValueError("candidate identities required")
+def _candidates(rows, trend):
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("strict v2 requires the complete frozen candidate set")
+    result = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("candidate_id"), str):
+            raise ValueError("complete candidate identity required")
+        weights = row.get("target_weights")
+        if weights is not None:
+            if (not isinstance(weights, list) or not weights or
+                    any(not isinstance(item, list) or len(item) != 2 for item in weights)):
+                raise ValueError("candidate target_weights must be null or complete pairs")
+            weights = tuple((str(key), D(str(value))) for key, value in weights)
+        reason = row.get("reason")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("candidate reason required")
+        result.append(Candidate(row["candidate_id"], trend_digest(trend), weights, reason))
+    ids = [candidate.candidate_id for candidate in result]
     if len(ids) != len(set(ids)) or "hold" not in ids:
         raise ValueError("unique candidates including hold required")
-    hold = candidates[ids.index("hold")]
-    if hold.get("semantics") != "retain_current_state":
-        raise ValueError("hold must mean retain_current_state")
-    selected = context.get("selected_candidate_id")
-    if selected not in ids or selected != row.get("choice"):
-        raise ValueError("selected candidate must bind the frozen choice")
-    _sha(context.get("choice_response_sha256"), "choice response")
-    supplied = _sha(context.get("context_sha256"), "decision context")
-    body = {key: value for key, value in context.items() if key != "context_sha256"}
-    if supplied != _digest(body):
-        raise ValueError("decision context hash mismatch")
-    return supplied
+    hold = result[ids.index("hold")]
+    if hold.target_weights is not None:
+        raise ValueError("hold candidate must preserve current state with target_weights null")
+    return tuple(result)
+
+
+def _strict_decision(row, state, cutoff):
+    """Verify real saved research and selector artifacts; never trust supplied hashes."""
+    artifacts = row.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise ValueError("strict v2 requires saved research and choice artifacts")
+    required = ("research_root", "choice_request", "choice_response")
+    if any(not isinstance(artifacts.get(key), str) or not artifacts[key] for key in required):
+        raise ValueError("strict v2 saved artifact paths are incomplete")
+    frozen = load_frozen_research(Path(artifacts["research_root"]), cutoff)
+    candidates = _candidates(row.get("candidates"), frozen.trend)
+    envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
+                "events": row.get("events", [])}
+    selected = load_frozen_choice(
+        Path(artifacts["choice_request"]), Path(artifacts["choice_response"]),
+        frozen.trend, candidates, state, envelope)
+    if selected.choice.components != ((row["choice"], D("1")),):
+        raise ValueError("saved final choice does not exactly match frozen replay choice")
+    return {
+        "binding_sha256": _digest({
+            "trend": trend_digest(frozen.trend),
+            "research_response": frozen.provenance.response_sha256,
+            "choice_response": selected.provenance.response_sha256,
+            "candidates": [_plain(asdict(candidate)) for candidate in candidates],
+            "state": _state_payload(state), "decision": envelope}),
+        "research_response_sha256": frozen.provenance.response_sha256,
+        "choice_response_sha256": selected.provenance.response_sha256,
+    }
 
 
 def _rule(row):
@@ -146,7 +151,6 @@ def replay(payload):
         raise ValueError("conditional replay must not claim real execution")
     rules = tuple(_rule(row) for row in payload["rules"])
     rule_by_id = {rule.rule_id: rule for rule in rules}
-    instruments = {rule.instrument for rule in rules}
     sim = EventSimulator(D(payload["initial_cash"]), rules,
                          {key: D(value) for key, value in payload.get("initial_shares", {}).items()})
     decisions = payload.get("decisions")
@@ -187,8 +191,8 @@ def replay(payload):
             raise ValueError("hold decision cannot introduce events")
         advance(cutoff)
         before = sim.state
-        context_sha = (_decision_context(row, before, instruments)
-                       if schema.endswith(".v2") else None)
+        binding = (_strict_decision(row, before, cutoff)
+                   if schema.endswith(".v2") else None)
         orders, scheduled = [], []
         for raw in events:
             event = _event(raw, cutoff)
@@ -205,7 +209,9 @@ def replay(payload):
             "choice": row["choice"], "reason": row.get("reason", ""),
             "orders": orders, "scheduled_settlements": scheduled,
             "state_before": _state_payload(before),
-            "decision_context_sha256": context_sha,
+            "decision_context_sha256": binding["binding_sha256"] if binding else None,
+            "research_response_sha256": binding["research_response_sha256"] if binding else None,
+            "choice_response_sha256": binding["choice_response_sha256"] if binding else None,
             "state_after_orders": _plain({"cash": sim.state.cash,
                                            "reserved_cash": sim.state.reserved_cash,
                                            "receivables": sim.state.receivables,
@@ -245,6 +251,7 @@ def replay(payload):
         "event_kernel_attested": True,
         "event_kernel_attestation_scope": "conditional_internal_consistency_only",
         "decision_context_bound": schema.endswith(".v2"),
+        "saved_artifacts_verified": schema.endswith(".v2"),
         "legacy_unbound_decision_context": schema.endswith(".v1"),
         "end_at": end_at.isoformat(), "liquidation_at": liquidation_at.isoformat(),
         "decisions": trace, "applied_settlements": applied_settlements,

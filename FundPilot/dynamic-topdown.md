@@ -57,7 +57,7 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 
 `python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 接受已经在外部冻结的多截点决策和事件，直接交给现有 `EventSimulator`。它不调用 `run_dynamic`，也不改变 `run_dynamic`／`run_frozen_synthetic` 的 `synthetic_fixture` 门禁；真实响应不能改名为 synthetic。输入必须明确声明 `mode=conditional_historical`、`real_execution_verified=false`，逐截点提供不可变 `decision_ref`、既定 choice 和事件。hold 必须没有事件，adapter 不会为到账后执行偷偷生成 Order。
 
-新输入应使用 `fundpilot.conditional-dynamic-replay.v2`。每个决策把实际看到的现金、冻结现金、应收和份额，与三份研究响应哈希、明确的 1／5／20 目标、完整候选身份、最终选择响应哈希绑定在一个 context digest 中；候选集必须包含真正的 `hold=retain_current_state`。这样，初始状态为现金时选择 hold 就只能保留现金，不能把 50/50 买入改名成“保持”。旧 v1 文件仍可复现原数值，但输出明确标记 `legacy_unbound_decision_context=true`，不签认研究、状态、候选和选择已经连接。
+新输入应使用 `fundpilot.conditional-dynamic-replay.v2`。严格 v2 不接受调用方自填的 64 位哈希：每个决策必须指向 checkout 外私有目录中的原三研究 request/response/result 和独立 choice request/response，由现有 `load_frozen_research`／`load_frozen_choice` 重新读取并核哈希。choice v2 的 prompt 同时绑定真实 replay state、完整候选内容（包括权重，真正 hold 的 `target_weights=null`）以及 cutoff、decision_ref、事件列表；缺原件、同 ID 改权重、改截点或改事件均拒绝，不能输出 bound=true。旧 v1 文件仍可复现原数值，但输出明确标记 `legacy_unbound_decision_context=true`，不签认研究、状态、候选和选择已经连接。
 
 `event_kernel_attested=true` 只表示调用方愿意让现有 typed kernel 检查这组条件研究事件，不证明真实成交。未知确认／到账历史只能写成预先冻结的情景时间，并在 limitations 保留；不得把情景改写成已核实交易。每个截点前只推进队列中不晚于该截点的结算，当前冻结决策只能提交自己的 Order，未来非 Order 事件入队；到明确 `end_at` 后仍未发生的事件保留 pending。输出同时分开期末账面估值、可用现金／冻结资金／应收和 `conditional_liquidation_value`，后者固定标记为非已到账现金。条件清算规则必须与资产一致，并在明确 `liquidation_at` 仍生效、已可用。
 
@@ -65,7 +65,7 @@ CLI 的输入和输出必须位于 checkout 外、由当前用户拥有且组／
 
 合成回归覆盖两个截点、hold 不生成交易、赎回确认后未到账资金不能申购、条件清算不等于现金，以及 CLI 子进程写出结果。该入口没有重新选择策略、评分或晋级。
 
-所有来源查询、打开与重试必须逐次通过 `DurableBudget.run_source_attempt`：先持久预扣，成功后才调用一次外部动作。达到上限或重复 operation ID 时，回调不会执行。该机械入口不恢复已经超额的预算，也不授权新的来源请求。
+进程内的单请求来源回调应逐次通过 `DurableBudget.run_source_attempt`：先持久预扣，再调用一次 callback；callback 抛错时费用仍已占用，达到上限或重复 operation ID 时 callback 不执行。调用者必须保证一个 callback 最多执行一次 HTTP／来源动作；该方法无法拦截 callback 内的多次 HTTP，也无法拦截绕过本进程的宿主 web 工具，因此并非所有来源路径的全局机械硬保护。它不恢复已经超额的预算，也不授权新的来源请求。
 
 ## 仍未接通
 

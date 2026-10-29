@@ -183,7 +183,12 @@ class DurableBudget:
         if status!='reserved':raise ValueError('operation not authorized: '+status)
 
     def run_source_attempt(self,operation_id,action,*,payload=None):
-        """Commit one source charge before invoking exactly one caller action."""
+        """Commit one source charge before one callback invocation.
+
+        The caller must guarantee that the callback performs at most one source
+        request.  This cannot intercept extra I/O inside the callback or host
+        tools invoked outside this process.
+        """
         if not callable(action):raise ValueError('source action must be callable')
         self.require(operation_id,'source',payload=payload)
         return action()

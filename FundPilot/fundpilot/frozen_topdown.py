@@ -60,13 +60,16 @@ def _binding_digest(value):
                              separators=(",", ":"), allow_nan=False).encode())
 
 
-def choice_context(candidates, state):
+def choice_context(candidates, state, decision_envelope=None):
     """Immutable selector inputs for v2 choice envelopes."""
+    if not isinstance(decision_envelope, dict):
+        raise ValueError("v2 final choice requires a decision envelope")
     return {
         "candidate_digest": _binding_digest([asdict(candidate) for candidate in candidates]),
         "state_digest": _binding_digest({
             "cash": state.cash, "reserved_cash": state.reserved_cash,
             "receivables": state.receivables, "shares": state.shares}),
+        "decision_digest": _binding_digest(decision_envelope),
     }
 
 
@@ -197,7 +200,8 @@ def load_frozen_research(root, expected_cutoff):
     return FrozenResearch(trend, provenance)
 
 
-def load_frozen_choice(request_path, response_path, trend, candidates, state=None):
+def load_frozen_choice(request_path, response_path, trend, candidates, state=None,
+                       decision_envelope=None):
     """Validate a distinct final-selection envelope; never reuse manager prose."""
     request_raw = read_private(request_path); response_raw = read_private(response_path)
     request = _object(request_raw, "choice request"); response = _object(response_raw, "choice response")
@@ -209,7 +213,7 @@ def load_frozen_choice(request_path, response_path, trend, candidates, state=Non
     if schema.endswith(".v2"):
         if state is None:
             raise ValueError("v2 final choice requires current state")
-        fields += ["candidate_digest", "state_digest"]
+        fields += ["candidate_digest", "state_digest", "decision_digest"]
     unsigned = {key: request[key] for key in fields if key in request}
     expected_prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
     if request.get("prompt_sha256") != expected_prompt or response.get("prompt_sha256") != expected_prompt:
@@ -220,7 +224,7 @@ def load_frozen_choice(request_path, response_path, trend, candidates, state=Non
     if request.get("candidate_ids") != candidate_ids or len(candidate_ids) != len(set(candidate_ids)):
         raise ValueError("final choice candidate binding mismatch")
     if schema.endswith(".v2"):
-        expected = choice_context(candidates, state)
+        expected = choice_context(candidates, state, decision_envelope)
         if any(request.get(key) != value for key, value in expected.items()):
             raise ValueError("final choice candidate content or state binding mismatch")
     if response.get("producer") not in ("actual_current_llm", "synthetic_fixture") or not response.get("model_ref"):
