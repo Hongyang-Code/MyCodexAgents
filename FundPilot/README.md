@@ -33,6 +33,8 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 - runner.py：输入驱动的每日编排、失败/部分状态、幂等恢复与成功发布回执；不自带生产资料、审校或存储适配器。
 - storage.py：私有快照校验/安全恢复；云端上传及版本条件替换由已授权工具执行。
 - llm-loop.md / fundpilot/llm_loop.py：真实LLM卡先冻结、再用已核验NAV离线评分的小型CLI；不生成LLM判断，不证明投资效果。
+- [冻结趋势评分与经验接线](trend-feedback.md) / trend_feedback.py：把原桥接判断映射到既有评分器，正确和错误均生成零权重经验候选；不新增预测、补填概率或自动晋级。
+- trend_diagnostic_grant.py：把一次明确批准的趋势诊断迁移到独立原子账本，保留已用来源次数、旧unknown和候选历史；它不调用来源、模型或评价。
 - decision-value.md / fundpilot/decision_value.py：复用会计内核的显式合成决策净价值比较CLI，含现金与买持基线；不支持真实执行收益声明。
 - conditional-value.md / fundpilot/conditional_value.py：独立只读的真实历史NAV与显式LLM分配条件估值，区分期末NAV、假设清算和现金；不放宽原事件门禁。
 - VALIDATION.md：实际测试、真实数据范围和未验收项。
@@ -67,3 +69,11 @@ smoke 路径必须不存在；全部资产和日历均为合成样例。输出�
 3. 宿主读取每份request中的完整prompt，交给当前已授权LLM实际生成；记录原文、真实生成时间和模型身份，以`actual_current_llm`保存响应，再用新进程`resume`。共bull、bear、manager三份；脚本不会自动登录、调用API或替用户完成模型生成。
 4. 查看最终`result.json`及同目录的输入/请求/响应/receipt/graph.sqlite；按[冻结、恢复和验收出口](upstream-adaptation.md#冻结恢复和验收出口)保存并校验私有检查点。条件判断尚须来源/估值日历映射，不能直接拿图输出冒充已合格评分卡。
 5. 12个月资格与固定标准由[历史验收工具](historical-acceptance.md)判定；材料不足pending。合成通过、三份响应或短窗回测不证明投资达标，不启现实指导、前瞻或交易。
+
+已有真实 stable 研究、外部预算预留、审阅后的 binding／来源／估值日历及 NAV 后，可按[冻结趋势评分与经验接线](trend-feedback.md#cli-使用步骤)依次运行 `trend_feedback freeze`、`score`、`feedback`。CLI 不抓来源、不调用模型、不自行取得预算；输出分别写入新的私有 frozen、scored、feedback 目录。弃权不计正确或错误，缺少截点前连续合格观察时 trend20 保持 pending。当前入口属于有真实失败案例的研究诊断版本，尚未验证动态投资或盈利能力，项目仍未完成。
+
+已经在外部冻结的多截点决策可用 `PYTHONPATH=FundPilot python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 交给现有 `EventSimulator` 做条件历史回放；schema、门禁和现金／条件清算边界见[总—分—总动态回测接线](dynamic-topdown.md#条件历史冻结输入入口)。该入口不调用模型、不重新选择或评分，也不把条件情景称为真实成交。
+
+新研究批次接入该入口时，须保存并提供三研究节点的原始 request／response／result／receipt、统一趋势、决策时完整资金状态、完整候选及不可用原因、独立 choice request／response 与订单意图。严格 conditional replay v2 只在实际核对这些原件且 choice 为 v2 后确认链路完整；结算 tape 独立记录，未来净值或确认／到账价格不属于先前决策输入。旧 v1 仅作 legacy 算术回放；缺原件时状态为 `summary_only_missing_raw`，不得补写或据摘要宣称模型效果。
+
+真正的 hold 保留当时现金和持仓且不发订单；等权或其他建仓必须是显式动作。初始为现金或基金都按实际状态处理，不强制仓位或调仓。缺同步历史的候选明确不可用，固定权重不称最优模型。每基金 1／5／20 估值日预测与长窗口组合扣费净收益分开评价；组合亏损不能判定短期预测错误，未预测的数字／区间不回填，弃权不计错。完整生成与选择是否改善留待下一新授权、预注册批次验证。

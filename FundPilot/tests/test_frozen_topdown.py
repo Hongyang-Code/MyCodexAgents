@@ -13,8 +13,10 @@ import unittest
 
 from fundpilot.dynamic_topdown import Candidate, Datum, ExecutionPlan, Mark, trend_digest
 from fundpilot.frozen_topdown import (
-    load_frozen_research, load_frozen_choice, run_frozen_synthetic,
+    build_choice_request, choice_context, load_frozen_research, load_frozen_choice,
+    run_frozen_synthetic,
 )
+from fundpilot.backtest import State
 from fundpilot.upstream_bridge import PIN, SCOPE, digest, write_new
 
 
@@ -159,6 +161,47 @@ class FrozenResearchTests(unittest.TestCase):
             response.write_text(json.dumps(bad)); response.chmod(0o600)
             with self.assertRaisesRegex(ValueError, "candidate"):
                 load_frozen_choice(request, response, frozen.trend, candidates)
+
+    def test_v2_choice_rejects_same_id_with_changed_weight_or_state(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); graph, cutoff = _fixture(root)
+            frozen = load_frozen_research(graph, cutoff)
+            state = State(cash=D("100"))
+            candidates = (Candidate("hold", trend_digest(frozen.trend), None, "hold"),
+                          Candidate("low", trend_digest(frozen.trend),
+                                    (("CASH", D(1)),), "low"))
+            plans = [
+                {"candidate_id": "hold", "target_weights": None, "reason": "hold",
+                 "fees": "0", "risk": "unchanged", "order_intents": [],
+                 "unavailable_reason": None},
+                {"candidate_id": "low", "target_weights": [["CASH", "1"]],
+                 "reason": "low", "fees": "0", "risk": "cash",
+                 "order_intents": [], "unavailable_reason": None}]
+            envelope = {"cutoff": cutoff.isoformat(), "decision_ref": "fixture-choice",
+                        "candidate_plans": plans}
+            request_obj = build_choice_request(frozen.trend, candidates, state, envelope,
+                                               "2026-10-27T00:00:03+00:00")
+            prompt = request_obj["prompt_sha256"]
+            request = root / "choice-request.json"; response = root / "choice-response.json"
+            write_new(request, request_obj)
+            write_new(response, {"schema": "fundpilot.final-choice-response.v2",
+                      "producer": "synthetic_fixture", "model_ref": "SYNTHETIC_NOT_LLM",
+                      "generated_at": "2026-10-27T00:00:04+00:00",
+                      "prompt_sha256": prompt,
+                      "components": [{"candidate_id": "low", "weight": "1"}],
+                      "reason": "fixture"})
+            load_frozen_choice(request, response, frozen.trend, candidates, state, envelope)
+            changed = (candidates[0], Candidate("low", trend_digest(frozen.trend),
+                                               (("CASH", D(".5")), ("SYNTH", D(".5"))), "low"))
+            with self.assertRaisesRegex(ValueError, "binding mismatch"):
+                load_frozen_choice(request, response, frozen.trend, changed, state, envelope)
+            with self.assertRaisesRegex(ValueError, "binding mismatch"):
+                load_frozen_choice(request, response, frozen.trend, candidates,
+                                   State(cash=D("99")), envelope)
+            changed_envelope = dict(envelope, decision_ref="changed-choice")
+            with self.assertRaisesRegex(ValueError, "binding mismatch"):
+                load_frozen_choice(request, response, frozen.trend, candidates, state,
+                                   changed_envelope)
 
     def test_completed_synthetic_envelopes_drive_one_dynamic_decision(self):
         with tempfile.TemporaryDirectory() as td:

@@ -62,10 +62,20 @@ def verify_bindings(seed, *, evidence_path=None, input_sha256=None):
         raise ValueError('legacy authority changed')
     for item in binding['bindings']:
         if digest(read_private(item['path']))!=item['sha256']:raise ValueError('frozen diagnostic binding changed')
-    if evidence_path is not None and not any(item['path']==str(Path(evidence_path).absolute()) and item['sha256']==input_sha256 for item in binding['bindings']):
-        raise ValueError('input outside approved diagnostic bindings')
-    if evidence_path is None and input_sha256 is not None and not any(item['sha256']==input_sha256 for item in binding['bindings']):
-        raise ValueError('checkpoint outside approved diagnostic bindings')
+    frozen = any(
+        item['path'] == str(Path(evidence_path).absolute())
+        and item['sha256'] == input_sha256 for item in binding['bindings']
+    ) if evidence_path is not None else any(
+        item['sha256'] == input_sha256 for item in binding['bindings']
+    )
+    if not frozen and binding.get('grant_kind') == 'trend_diagnostic':
+        from .trend_scope_evidence import verify_registered_evidence
+        frozen = verify_registered_evidence(
+            binding, evidence_path=evidence_path, input_sha256=input_sha256)
+    if not frozen:
+        raise ValueError('input outside approved diagnostic bindings'
+                         if evidence_path is not None else
+                         'checkpoint outside approved diagnostic bindings')
 
 
 def main():

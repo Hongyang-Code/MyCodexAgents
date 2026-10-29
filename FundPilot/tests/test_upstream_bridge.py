@@ -9,7 +9,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from fundpilot.upstream_bridge import fund_prompt, write_new
+from fundpilot.upstream_bridge import (PREDICTION_TARGET_CONTRACT,
+    PREDICTION_TARGET_CONTRACT_VERSION, build_manager_request_v2,
+    build_nav_evidence, digest,
+    fund_prompt, write_new)
 from fundpilot.durable_budget import DurableBudget
 
 def synthetic_budget(root):
@@ -25,6 +28,87 @@ class BridgeContractTests(unittest.TestCase):
         self.assertNotIn('stock growth potential',text)
         self.assertIn('NAV-internal',text)
         self.assertIn('unknown-price',text)
+        self.assertIn(PREDICTION_TARGET_CONTRACT,text)
+        self.assertIn('flat only when R = 0',text)
+        self.assertIn('abstain means evidence is insufficient and is not flat',text)
+
+    def test_multi_fund_manager_request_binds_exact_prediction_contract(self):
+        at='2026-07-01T13:30:00+00:00'
+        request=build_manager_request_v2(prompt_body='Return the multi-fund JSON.',
+            information_cutoff=at,captured_at=at,
+            input_response_sha256=['1'*64,'2'*64],funds=['A','B'])
+        contract=request['prediction_target_contract']
+        self.assertEqual(contract['version'],PREDICTION_TARGET_CONTRACT_VERSION)
+        self.assertEqual(contract['sha256'],digest(PREDICTION_TARGET_CONTRACT.encode()))
+        self.assertTrue(request['prompt'].startswith(PREDICTION_TARGET_CONTRACT+'\n'))
+        self.assertEqual(request['prompt_sha256'],digest(request['prompt'].encode()))
+        self.assertEqual(request['funds'],['A','B'])
+
+    def test_multi_fund_manager_request_rejects_reserved_metadata_override(self):
+        at='2026-07-01T13:30:00+00:00'
+        with self.assertRaisesRegex(ValueError,'reserved fields: prompt_sha256'):
+            build_manager_request_v2(prompt_body='Return JSON.',
+                information_cutoff=at,captured_at=at,
+                input_response_sha256=['1'*64,'2'*64],
+                prompt_sha256='0'*64,funds=['A','B'])
+
+    def test_complete_nav_evidence_preserves_167_rows_and_features(self):
+        rows=[{'date':f'2020-{1 + i//28:02d}-{1 + i%28:02d}',
+               'nav':str(1 + i/1000)} for i in range(167)]
+        evidence=build_nav_evidence(
+            [{'instrument':'SYNTHETIC/A/CNY','observations':rows}],
+            cutoff='2020-06-27T21:30:00+08:00')
+        fund=evidence['funds'][0]
+        self.assertEqual(fund['provided_observation_count'],167)
+        self.assertEqual(fund['cutoff_observation_count'],167)
+        self.assertEqual(len(fund['observations']),167)
+        self.assertEqual([x['status'] for x in fund['trailing_changes']],
+                         ['available']*3)
+        prompt=fund_prompt('bull','Resources available: X\nUse this information to deliver',evidence)
+        self.assertIn('VALIDATED COMPLETE NAV EVIDENCE',prompt)
+        request=build_manager_request_v2(prompt_body='Return JSON.',
+            information_cutoff='2020-06-27T21:30:00+08:00',
+            captured_at='2020-06-27T21:30:00+08:00',
+            input_response_sha256=['1'*64,'2'*64],nav_evidence=evidence)
+        self.assertIn('"cutoff_observation_count":167',request['prompt'])
+
+    def test_nav_evidence_rejects_duplicate_nonfinite_and_nonpositive(self):
+        base={'instrument':'SYNTHETIC/A/CNY'}
+        bad=([
+            {'date':'2020-01-01','nav':'1'}, {'date':'2020-01-01','nav':'2'}],
+            [{'date':'2020-01-01','nav':'NaN'}],
+            [{'date':'2020-01-01','nav':'0'}])
+        for rows in bad:
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                build_nav_evidence([{**base,'observations':rows}],
+                    cutoff='2020-01-02T00:00:00+00:00')
+
+    def test_short_fund_does_not_suppress_complete_fund(self):
+        full=[{'date':f'2020-01-{i:02d}','nav':str(i)} for i in range(1,23)]
+        short=full[-3:]
+        evidence=build_nav_evidence([
+            {'instrument':'A','observations':full},
+            {'instrument':'B','observations':short}],
+            cutoff='2020-01-22T00:00:00+00:00')
+        self.assertEqual(evidence['synchronized_observation_count'],3)
+        self.assertEqual(evidence['funds'][0]['trailing_changes'][2]['status'],'available')
+        self.assertEqual(evidence['funds'][1]['trailing_changes'][2]['status'],'insufficient')
+
+    def test_cutoff_timezone_future_filter_and_tamper_rejection(self):
+        rows=[{'date':'2020-01-01','nav':'1'}, {'date':'2020-01-02','nav':'2'},
+              {'date':'2020-01-03','nav':'3'}]
+        evidence=build_nav_evidence([{'instrument':'A','observations':rows}],
+            cutoff='2020-01-01T16:30:00+00:00')
+        self.assertEqual(evidence['funds'][0]['cutoff_range']['end'],'2020-01-02')
+        self.assertEqual(evidence['funds'][0]['cutoff_observation_count'],2)
+        altered=json.loads(json.dumps(evidence));altered['funds'][0]['observations'][0]['nav']='9'
+        with self.assertRaisesRegex(ValueError,'mismatch'):
+            fund_prompt('bull','Resources available: X\nUse this information to deliver',altered)
+        with self.assertRaisesRegex(ValueError,'cutoff differs'):
+            build_manager_request_v2(prompt_body='x',
+                information_cutoff='2020-01-03T00:00:00+08:00',
+                captured_at='2020-01-03T00:00:00+08:00',
+                input_response_sha256=['1'*64,'2'*64],nav_evidence=evidence)
 
     def test_upstream_prompt_drift_fails_closed(self):
         with self.assertRaises(ValueError):fund_prompt('bull','unexpected prompt')
@@ -47,13 +131,30 @@ class ActualUpstreamGraphTests(unittest.TestCase):
                                    '--upstream',upstream],check=True,capture_output=True,text=True)
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);e=root/'evidence.json';out=root/'graph'
-            raw=b'{ "fund":"SYNTHETIC:unknown", "information_cutoff":"2020-01-01", "market_report":"SYNTHETIC DATA ONLY", "fundamentals_report":"unknown" }\n'
+            from datetime import timedelta
+            nav=[{'date':(datetime(2019,7,19)+timedelta(days=i)).date().isoformat(),
+                  'nav':str(1+i/1000)} for i in range(167)]
+            raw=(json.dumps({'fund':'SYNTHETIC:unknown',
+                'information_cutoff':'2020-01-01T21:30:00+08:00',
+                'market_report':'SYNTHETIC DATA ONLY','fundamentals_report':'unknown',
+                'nav_histories':[{'instrument':'SYNTHETIC/A/CNY','observations':nav}]})+'\n').encode()
             e.write_bytes(raw);e.chmod(0o600);budget=synthetic_budget(root)
             call('start','--evidence',str(e),'--output',str(out),'--budget',str(budget),'--operation-id','synthetic-graph')
             self.assertEqual((out/'input.json').read_bytes(),raw)
             self.assertEqual(json.loads((out/'receipt.json').read_text())['input_sha256'],hashlib.sha256(raw).hexdigest())
             for i,role in enumerate(('bull','bear','manager'),1):
                 q=json.loads((out/f'request-{i}.json').read_text());self.assertEqual(q['role'],role)
+                marker='VALIDATED COMPLETE NAV EVIDENCE:\n'
+                self.assertIn(marker,q['prompt'])
+                embedded=json.loads(q['prompt'].split(marker,1)[1])
+                saved=embedded['funds'][0]
+                self.assertEqual(len(saved['observations']),167)
+                self.assertEqual(saved['observations'][0],nav[0])
+                self.assertEqual(saved['observations'][-1],nav[-1])
+                h20=next(x for x in saved['trailing_changes'] if x['horizon']==20)
+                self.assertEqual(h20['window_observations'],21)
+                self.assertEqual(h20['start'],nav[-21])
+                self.assertEqual(h20['end'],nav[-1])
                 r=root/f'answer{i}.json';r.write_text(json.dumps({'producer':'synthetic_fixture',
                     'model_ref':'SYNTHETIC_NOT_LLM','generated_at':datetime.now(timezone.utc).isoformat(),
                     'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC response only'}))

@@ -128,7 +128,12 @@ class DurableBudget:
                 return 'already_reserved_do_not_execute'
             count=lambda k:sum(o['kind']==k for o in ops)
             grant=d['seed'].get('diagnostic_grant')
-            if grant and kind not in ('prediction_batch','comparison_arm','llm','checkpoint_resume','diagnostic_evaluation'):
+            trend_grant=bool(grant and grant.get('grant_kind')=='trend_diagnostic')
+            allowed_grant_kinds=(('prediction_batch','llm','checkpoint_resume','source','retry',
+                                  'diagnostic_evaluation') if trend_grant else
+                                 ('prediction_batch','comparison_arm','llm','checkpoint_resume',
+                                  'diagnostic_evaluation'))
+            if grant and kind not in allowed_grant_kinds:
                 return 'skip_partial'
             used=d['seed']['used']
             allowed=True
@@ -158,8 +163,12 @@ class DurableBudget:
                          and not any(o['kind']=='comparison_arm' and o['parent']==parent for o in ops)
                          and used['llm'] is not None and used['llm']+count('llm')<=3)
             if kind=='diagnostic_evaluation':
-                allowed=(bool(grant) and count('llm')==12 and count('checkpoint_resume')==12
-                         and count('diagnostic_evaluation')==0 and any(o['id']==parent and o['kind']=='prediction_batch' for o in ops))
+                requests={o['id'] for o in ops if o['kind']=='llm'}
+                completed={o['parent'] for o in ops if o['kind']=='checkpoint_resume'}
+                responses_ready=(bool(requests) and requests<=completed) if trend_grant else (
+                    len(requests)==12 and len(completed)==12)
+                allowed=(bool(grant) and responses_ready and count('diagnostic_evaluation')==0
+                         and any(o['id']==parent and o['kind']=='prediction_batch' for o in ops))
             if kind=='checkpoint_resume':
                 allowed=any(o['id']==parent and o['kind']=='llm' for o in ops)
             if not allowed:return 'skip_partial'
@@ -172,3 +181,14 @@ class DurableBudget:
     def require(self,*args,**kwargs):
         status=self.reserve(*args,**kwargs)
         if status!='reserved':raise ValueError('operation not authorized: '+status)
+
+    def run_source_attempt(self,operation_id,action,*,payload=None):
+        """Commit one source charge before one callback invocation.
+
+        The caller must guarantee that the callback performs at most one source
+        request.  This cannot intercept extra I/O inside the callback or host
+        tools invoked outside this process.
+        """
+        if not callable(action):raise ValueError('source action must be callable')
+        self.require(operation_id,'source',payload=payload)
+        return action()
