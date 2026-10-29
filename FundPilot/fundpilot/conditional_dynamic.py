@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 
 from .backtest import Confirmation, EventSimulator, Order, Receipt, Rule
-from .dynamic_topdown import Candidate, trend_digest
+from .dynamic_topdown import Candidate, _weights, trend_digest
 from .frozen_topdown import load_frozen_choice, load_frozen_research
 from .upstream_bridge import read_private, write_bytes_new
 
@@ -72,6 +72,13 @@ def _candidates(rows, trend):
                     any(not isinstance(item, list) or len(item) != 2 for item in weights)):
                 raise ValueError("candidate target_weights must be null or complete pairs")
             weights = tuple((str(key), D(str(value))) for key, value in weights)
+        if row["candidate_id"] == "hold":
+            if weights is not None:
+                raise ValueError("hold candidate must preserve current state with target_weights null")
+        else:
+            if weights is None:
+                raise ValueError("non-hold candidate requires explicit target_weights")
+            _weights(weights)
         reason = row.get("reason")
         if not isinstance(reason, str) or not reason:
             raise ValueError("candidate reason required")
@@ -79,10 +86,15 @@ def _candidates(rows, trend):
     ids = [candidate.candidate_id for candidate in result]
     if len(ids) != len(set(ids)) or "hold" not in ids:
         raise ValueError("unique candidates including hold required")
-    hold = result[ids.index("hold")]
-    if hold.target_weights is not None:
-        raise ValueError("hold candidate must preserve current state with target_weights null")
     return tuple(result)
+
+
+def _order_intents(row):
+    """Selector-visible current orders, excluding unknowable future settlements."""
+    fields = ("type", "event_id", "at", "source", "instrument", "side",
+              "quantity", "rule_id")
+    return [{key: event[key] for key in fields if key in event}
+            for event in row.get("events", []) if event.get("type") == "order"]
 
 
 def _strict_decision(row, state, cutoff):
@@ -96,10 +108,11 @@ def _strict_decision(row, state, cutoff):
     frozen = load_frozen_research(Path(artifacts["research_root"]), cutoff)
     candidates = _candidates(row.get("candidates"), frozen.trend)
     envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
-                "events": row.get("events", [])}
+                "order_intents": _order_intents(row)}
     selected = load_frozen_choice(
         Path(artifacts["choice_request"]), Path(artifacts["choice_response"]),
-        frozen.trend, candidates, state, envelope)
+        frozen.trend, candidates, state, envelope,
+        required_schema="fundpilot.final-choice-request.v2")
     if selected.choice.components != ((row["choice"], D("1")),):
         raise ValueError("saved final choice does not exactly match frozen replay choice")
     return {

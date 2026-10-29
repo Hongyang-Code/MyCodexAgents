@@ -9,7 +9,7 @@ import os
 from decimal import Decimal
 
 from fundpilot.backtest import State
-from fundpilot.conditional_dynamic import replay
+from fundpilot.conditional_dynamic import _order_intents, replay
 from fundpilot.dynamic_topdown import Candidate, trend_digest
 from fundpilot.frozen_topdown import choice_context, load_frozen_research
 from fundpilot.upstream_bridge import PIN, SCOPE, digest, write_new
@@ -88,7 +88,7 @@ def bind_v2(value, root):
                       reserved_cash=Decimal(states[index]["reserved_cash"]),
                       shares={k: Decimal(v) for k, v in states[index]["shares"].items()})
         envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
-                    "events": row.get("events", [])}
+                    "order_intents": _order_intents(row)}
         unsigned = {"schema": "fundpilot.final-choice-request.v2",
                     "trend_digest": trend_digest(frozen.trend),
                     "candidate_ids": ["hold", "target"],
@@ -138,8 +138,28 @@ class ConditionalDynamicTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "prompt binding"):
                 replay(value)
 
-    def test_v2_rejects_same_id_weight_cutoff_or_event_change(self):
-        for mutation in ("weight", "cutoff", "event"):
+    def test_v2_rejects_legacy_choice_artifacts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = bind_v2(fixture(), root); row = value["decisions"][0]
+            request = Path(row["artifacts"]["choice_request"])
+            response = Path(row["artifacts"]["choice_response"])
+            old = json.loads(request.read_text())
+            unsigned = {"schema": "fundpilot.final-choice-request.v1",
+                        "trend_digest": old["trend_digest"],
+                        "candidate_ids": old["candidate_ids"]}
+            prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
+            unsigned.update(prompt_sha256=prompt, captured_at=old["captured_at"])
+            request.write_text(json.dumps(unsigned)); request.chmod(0o600)
+            old_response = json.loads(response.read_text())
+            old_response.update(schema="fundpilot.final-choice-response.v1",
+                                prompt_sha256=prompt)
+            response.write_text(json.dumps(old_response)); response.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "requires final choice v2"):
+                replay(value)
+
+    def test_v2_rejects_same_id_weight_cutoff_or_order_change(self):
+        for mutation in ("weight", "cutoff", "order"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
                 root = Path(td); os.chmod(root, 0o700)
                 value = bind_v2(fixture(), root)
@@ -150,6 +170,30 @@ class ConditionalDynamicTests(unittest.TestCase):
                     value["decisions"][0]["events"][0]["at"] = value["decisions"][0]["cutoff"]
                 else:
                     value["decisions"][0]["events"][0]["quantity"] = "99"
+                with self.assertRaises(ValueError):
+                    replay(value)
+
+    def test_v2_does_not_bind_future_settlement_price_into_choice_prompt(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = bind_v2(fixture(), root)
+            value["decisions"] = value["decisions"][:1]
+            first = replay(value)
+            value["decisions"][0]["events"][1]["price"] = "2"
+            changed = replay(value)
+            self.assertEqual(first["decisions"][0]["decision_context_sha256"],
+                             changed["decisions"][0]["decision_context_sha256"])
+            self.assertNotEqual(first["input_sha256"], changed["input_sha256"])
+            self.assertEqual(changed["terminal_state"]["shares"]["A"], "50")
+
+    def test_v2_rejects_invalid_nonhold_candidate_weights(self):
+        bad = ([['A', '-.1'], ['B', '1.1']], [['A', '.5'], ['A', '.5']],
+               [['A', '.4'], ['B', '.4']], None)
+        for weights in bad:
+            with self.subTest(weights=weights), tempfile.TemporaryDirectory() as td:
+                root = Path(td); os.chmod(root, 0o700)
+                value = bind_v2(fixture(), root)
+                value["decisions"][0]["candidates"][1]["target_weights"] = weights
                 with self.assertRaises(ValueError):
                     replay(value)
 

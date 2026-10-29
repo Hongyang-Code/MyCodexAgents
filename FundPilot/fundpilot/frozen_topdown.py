@@ -201,11 +201,13 @@ def load_frozen_research(root, expected_cutoff):
 
 
 def load_frozen_choice(request_path, response_path, trend, candidates, state=None,
-                       decision_envelope=None):
+                       decision_envelope=None, required_schema=None):
     """Validate a distinct final-selection envelope; never reuse manager prose."""
     request_raw = read_private(request_path); response_raw = read_private(response_path)
     request = _object(request_raw, "choice request"); response = _object(response_raw, "choice response")
     schema = request.get("schema")
+    if required_schema is not None and schema != required_schema:
+        raise ValueError("strict replay requires final choice v2 artifacts")
     if (schema not in ("fundpilot.final-choice-request.v1", "fundpilot.final-choice-request.v2")
             or response.get("schema") != schema.replace("request", "response")):
         raise ValueError("final choice schema mismatch")
