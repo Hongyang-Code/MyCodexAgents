@@ -94,6 +94,22 @@ class BridgeContractTests(unittest.TestCase):
         self.assertEqual(evidence['funds'][0]['trailing_changes'][2]['status'],'available')
         self.assertEqual(evidence['funds'][1]['trailing_changes'][2]['status'],'insufficient')
 
+    def test_cutoff_timezone_future_filter_and_tamper_rejection(self):
+        rows=[{'date':'2020-01-01','nav':'1'}, {'date':'2020-01-02','nav':'2'},
+              {'date':'2020-01-03','nav':'3'}]
+        evidence=build_nav_evidence([{'instrument':'A','observations':rows}],
+            cutoff='2020-01-01T16:30:00+00:00')
+        self.assertEqual(evidence['funds'][0]['cutoff_range']['end'],'2020-01-02')
+        self.assertEqual(evidence['funds'][0]['cutoff_observation_count'],2)
+        altered=json.loads(json.dumps(evidence));altered['funds'][0]['observations'][0]['nav']='9'
+        with self.assertRaisesRegex(ValueError,'mismatch'):
+            fund_prompt('bull','Resources available: X\nUse this information to deliver',altered)
+        with self.assertRaisesRegex(ValueError,'cutoff differs'):
+            build_manager_request_v2(prompt_body='x',
+                information_cutoff='2020-01-03T00:00:00+08:00',
+                captured_at='2020-01-03T00:00:00+08:00',
+                input_response_sha256=['1'*64,'2'*64],nav_evidence=evidence)
+
     def test_upstream_prompt_drift_fails_closed(self):
         with self.assertRaises(ValueError):fund_prompt('bull','unexpected prompt')
         with self.assertRaises(ValueError):fund_prompt('manager','unexpected prompt')
@@ -115,13 +131,22 @@ class ActualUpstreamGraphTests(unittest.TestCase):
                                    '--upstream',upstream],check=True,capture_output=True,text=True)
         with tempfile.TemporaryDirectory() as td:
             root=Path(td);e=root/'evidence.json';out=root/'graph'
-            raw=b'{ "fund":"SYNTHETIC:unknown", "information_cutoff":"2020-01-01", "market_report":"SYNTHETIC DATA ONLY", "fundamentals_report":"unknown" }\n'
+            from datetime import timedelta
+            nav=[{'date':(datetime(2019,7,19)+timedelta(days=i)).date().isoformat(),
+                  'nav':str(1+i/1000)} for i in range(167)]
+            raw=(json.dumps({'fund':'SYNTHETIC:unknown',
+                'information_cutoff':'2020-01-01T21:30:00+08:00',
+                'market_report':'SYNTHETIC DATA ONLY','fundamentals_report':'unknown',
+                'nav_histories':[{'instrument':'SYNTHETIC/A/CNY','observations':nav}]})+'\n').encode()
             e.write_bytes(raw);e.chmod(0o600);budget=synthetic_budget(root)
             call('start','--evidence',str(e),'--output',str(out),'--budget',str(budget),'--operation-id','synthetic-graph')
             self.assertEqual((out/'input.json').read_bytes(),raw)
             self.assertEqual(json.loads((out/'receipt.json').read_text())['input_sha256'],hashlib.sha256(raw).hexdigest())
             for i,role in enumerate(('bull','bear','manager'),1):
                 q=json.loads((out/f'request-{i}.json').read_text());self.assertEqual(q['role'],role)
+                self.assertIn('VALIDATED COMPLETE NAV EVIDENCE',q['prompt'])
+                self.assertIn('"cutoff_observation_count":167',q['prompt'])
+                self.assertIn('"horizon":20',q['prompt'])
                 r=root/f'answer{i}.json';r.write_text(json.dumps({'producer':'synthetic_fixture',
                     'model_ref':'SYNTHETIC_NOT_LLM','generated_at':datetime.now(timezone.utc).isoformat(),
                     'prompt_sha256':q['prompt_sha256'],'content':'SYNTHETIC response only'}))

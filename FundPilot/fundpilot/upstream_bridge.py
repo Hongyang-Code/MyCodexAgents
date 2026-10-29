@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from zoneinfo import ZoneInfo
 import sqlite3
 import stat
 
@@ -48,7 +49,7 @@ def prediction_target_contract():
             'text': PREDICTION_TARGET_CONTRACT}
 
 
-def build_nav_evidence(funds, *, cutoff):
+def build_nav_evidence(funds, *, cutoff, valuation_timezone='Asia/Shanghai'):
     """Validate complete current-vintage NAV rows and expose reproducible features.
 
     This does not attest historical availability.  It deliberately computes each
@@ -56,7 +57,11 @@ def build_nav_evidence(funds, *, cutoff):
     that needs them and cannot erase another fund's usable observations.
     """
     cutoff_at = checked_time(cutoff)
-    cutoff_date = cutoff_at.date().isoformat()
+    try:
+        zone = ZoneInfo(valuation_timezone)
+    except Exception as exc:
+        raise ValueError('valid valuation timezone required') from exc
+    cutoff_date = cutoff_at.astimezone(zone).date().isoformat()
     if not isinstance(funds, list) or not funds:
         raise ValueError('nonempty per-fund NAV evidence required')
     output = []
@@ -116,6 +121,7 @@ def build_nav_evidence(funds, *, cutoff):
     return {
         'schema': 'fundpilot.nav-evidence.v1',
         'cutoff': cutoff,
+        'valuation_timezone': valuation_timezone,
         'historical_availability': 'unknown_current_vintage_not_asof_proof',
         'funds': output,
         'synchronized_observation_count': len(common),
@@ -127,6 +133,26 @@ def build_nav_evidence(funds, *, cutoff):
 def _nav_evidence_text(nav_evidence):
     if not isinstance(nav_evidence, dict) or nav_evidence.get('schema') != 'fundpilot.nav-evidence.v1':
         raise ValueError('validated NAV evidence v1 required')
+    funds = nav_evidence.get('funds')
+    if not isinstance(funds, list) or not funds:
+        raise ValueError('NAV evidence funds required')
+    rebuilt = build_nav_evidence([
+        {'instrument': fund.get('instrument'), 'observations': fund.get('observations')}
+        for fund in funds], cutoff=nav_evidence.get('cutoff'),
+        valuation_timezone=nav_evidence.get('valuation_timezone', 'Asia/Shanghai'))
+    for supplied, checked in zip(funds, rebuilt['funds']):
+        if (supplied.get('instrument') != checked['instrument'] or
+                supplied.get('cutoff_observation_count') != checked['cutoff_observation_count'] or
+                supplied.get('cutoff_range') != checked['cutoff_range'] or
+                supplied.get('trailing_changes') != checked['trailing_changes'] or
+                supplied.get('observations') != checked['observations'] or
+                not isinstance(supplied.get('provided_observation_count'), int) or
+                supplied['provided_observation_count'] < checked['cutoff_observation_count']):
+            raise ValueError('NAV evidence content/statistics mismatch')
+    for key in ('cutoff', 'valuation_timezone', 'historical_availability',
+                'synchronized_observation_count', 'synchronized_gate_note'):
+        if nav_evidence.get(key) != rebuilt.get(key):
+            raise ValueError('NAV evidence envelope mismatch: '+key)
     return json.dumps(nav_evidence, ensure_ascii=False, sort_keys=True,
                       separators=(',', ':'), allow_nan=False)
 
@@ -153,6 +179,8 @@ def build_manager_request_v2(*, prompt_body, information_cutoff,
     contract = prediction_target_contract()
     prompt = PREDICTION_TARGET_CONTRACT + '\n\n' + prompt_body
     if nav_evidence is not None:
+        if checked_time(nav_evidence.get('cutoff')) != checked_time(information_cutoff):
+            raise ValueError('NAV evidence cutoff differs from information cutoff')
         prompt += '\n\nVALIDATED COMPLETE NAV EVIDENCE:\n' + _nav_evidence_text(nav_evidence)
     return {
         'schema': 'fundpilot.research-request.v2', 'role': 'manager',
@@ -291,9 +319,10 @@ def fund_prompt(role, original, nav_evidence=None):
 
 
 class CurrentLLMBridge:
-    def __init__(self, role, root=None):
+    def __init__(self, role, root=None, nav_evidence=None):
         self.role = role
         self.root = root
+        self.nav_evidence = nav_evidence
 
     def with_structured_output(self, schema):
         raise NotImplementedError('explicit text bridge; no hidden schema retry')
@@ -301,7 +330,7 @@ class CurrentLLMBridge:
     def invoke(self, original):
         from langchain_core.messages import AIMessage
         from langgraph.types import interrupt
-        prompt = fund_prompt(self.role, original)
+        prompt = fund_prompt(self.role, original, self.nav_evidence)
         request = {'role': self.role, 'prompt': prompt, 'prompt_sha256': digest(prompt.encode()),
                    'bridge': 'current_conversation_llm', **SCOPE}
         index = {'bull':1, 'bear':2, 'manager':3}[self.role]
@@ -328,10 +357,17 @@ def build_graph(checkpointer, root=None):
     from tradingagents.agents.researchers.bear_researcher import create_bear_researcher
     from tradingagents.agents.managers.research_manager import create_research_manager
     from tradingagents.graph.conditional_logic import ConditionalLogic
+    nav_evidence = None
+    if root is not None:
+        evidence = json.loads(read_private(Path(root)/'input.json'))
+        if 'nav_histories' in evidence:
+            nav_evidence = build_nav_evidence(
+                evidence['nav_histories'], cutoff=evidence['information_cutoff'],
+                valuation_timezone=evidence.get('valuation_timezone', 'Asia/Shanghai'))
     graph = StateGraph(AgentState)
-    graph.add_node('Bull Researcher', create_bull_researcher(CurrentLLMBridge('bull', root)))
-    graph.add_node('Bear Researcher', create_bear_researcher(CurrentLLMBridge('bear', root)))
-    graph.add_node('Research Manager', create_research_manager(CurrentLLMBridge('manager', root)))
+    graph.add_node('Bull Researcher', create_bull_researcher(CurrentLLMBridge('bull', root, nav_evidence)))
+    graph.add_node('Bear Researcher', create_bear_researcher(CurrentLLMBridge('bear', root, nav_evidence)))
+    graph.add_node('Research Manager', create_research_manager(CurrentLLMBridge('manager', root, nav_evidence)))
     graph.add_edge(START, 'Bull Researcher')
     router = ConditionalLogic(max_debate_rounds=1)
     paths = {n:n for n in ('Bull Researcher', 'Bear Researcher', 'Research Manager')}
