@@ -1,13 +1,17 @@
 """Synthetic bridge -> unchanged scorer -> correct/incorrect case feedback."""
 import csv
+from dataclasses import replace
 from datetime import date, timedelta
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fundpilot import llm_loop
 from fundpilot.trend_feedback import freeze_bridge_cards, feedback_from_scores
+from fundpilot import trend_feedback
+from fundpilot.frozen_topdown import load_frozen_research
 from fundpilot.upstream_bridge import digest, write_new
 from test_frozen_topdown import _fixture
 
@@ -170,6 +174,42 @@ class TrendFeedbackTests(unittest.TestCase):
             path.write_text(json.dumps(binding))
             with self.assertRaisesRegex(ValueError, "same-producer"):
                 self.freeze()
+
+    def test_actual_bridge_accepts_only_existing_retrospective_diagnostic_mode(self):
+        path = self.root / "binding.json"
+        binding = json.loads(path.read_bytes())
+        binding["mode"] = "retrospective_diagnostic"
+        path.write_text(json.dumps(binding))
+        with patch("fundpilot.trend_feedback.load_frozen_research") as load:
+            fixture = load_frozen_research(self.graph, llm_loop.timestamp(binding["cutoff"]))
+            fixture = replace(fixture, provenance=replace(fixture.provenance, producer="actual_llm"))
+            load.return_value = fixture
+            with self.assertRaisesRegex(ValueError, "diagnostic captured snapshot kind required"):
+                self.freeze()
+
+    def test_frozen_manager_accepts_nonempty_structured_gap_list(self):
+        response_path = self.graph / "response-3.json"
+        response = json.loads(response_path.read_bytes())
+        content = json.loads(response["content"])
+        for row in content["forecasts"]:
+            row["gaps"] = [row["gaps"], "second explicit gap"]
+        response["content"] = json.dumps(content)
+        response_path.write_text(json.dumps(response))
+        result_path = self.graph / "result.json"
+        result = json.loads(result_path.read_bytes())
+        result["research_state"]["investment_plan"] = response["content"]
+        result_path.write_text(json.dumps(result))
+        frozen_input = json.loads((self.graph / "input.json").read_bytes())
+        loaded = load_frozen_research(
+            self.graph, llm_loop.timestamp(frozen_input["information_cutoff"]))
+        self.assertIn("frozen-bridge-", loaded.trend.trend_id)
+
+    def test_cli_exposes_freeze_score_and_feedback(self):
+        for command in ("freeze", "score", "feedback"):
+            with patch("sys.argv", ["trend_feedback", command, "--help"]):
+                with self.assertRaises(SystemExit) as stopped:
+                    trend_feedback.main()
+                self.assertEqual(stopped.exception.code, 0)
 
     def test_score_manifest_cannot_refer_to_other_frozen_input(self):
         self.freeze()

@@ -106,9 +106,14 @@ def _manager_trend(content, cutoff, response_sha):
     by_horizon = {}
     invalidations = []
     for row in forecasts:
-        required = ("rationale", "counterevidence", "invalidation", "gaps")
+        required = ("rationale", "counterevidence", "invalidation")
+        gaps = row.get("gaps")
+        complete_gaps = ((isinstance(gaps, str) and gaps.strip()) or
+                         (isinstance(gaps, list) and gaps and
+                          all(isinstance(gap, str) and gap.strip() for gap in gaps)))
         if (row.get("direction") not in directions or
                 any(not isinstance(row.get(key), str) or not row[key].strip() for key in required) or
+                not complete_gaps or
                 (row.get("p_up") is not None and not isinstance(row.get("p_up"), (int, float)))):
             raise ValueError("complete structured forecast fields required")
         if row.get("p_up") is not None and not 0 <= row["p_up"] <= 1:

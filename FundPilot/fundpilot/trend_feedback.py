@@ -5,6 +5,7 @@ Existing llm_loop.freeze/score and research.Experience retain their semantics.
 """
 from dataclasses import asdict
 from datetime import date
+import argparse
 import json
 from pathlib import Path
 import tempfile
@@ -59,7 +60,8 @@ def freeze_bridge_cards(*, research_root, binding_path, sources_path,
         raise ValueError("binding must preserve exact frozen fund identity")
     mode = binding.get("mode")
     synthetic = research.provenance.producer == "synthetic_fixture"
-    if mode != ("synthetic" if synthetic else "retrospective"):
+    allowed_modes = {"synthetic"} if synthetic else {"retrospective", "retrospective_diagnostic"}
+    if mode not in allowed_modes:
         raise ValueError("only same-producer synthetic or retrospective mapping allowed")
     rows = _claim_rows(manager_raw)
     calendar_raw = read_private(Path(calendar_path))
@@ -245,3 +247,34 @@ def feedback_from_scores(*, frozen_root, scored_root, output):
         "created_at": reviewed_at.isoformat(),
     })
     return feedback
+
+
+def main():
+    """Run the existing freeze, score and feedback stages without inference."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    freeze_parser = commands.add_parser("freeze")
+    for name in ("research-root", "binding", "sources", "calendar", "output"):
+        freeze_parser.add_argument("--" + name, required=True)
+    score_parser = commands.add_parser("score")
+    for name in ("frozen", "nav", "nav-manifest", "as-of", "output"):
+        score_parser.add_argument("--" + name, required=True)
+    feedback_parser = commands.add_parser("feedback")
+    for name in ("frozen-root", "scored-root", "output"):
+        feedback_parser.add_argument("--" + name, required=True)
+    args = parser.parse_args()
+    if args.command == "freeze":
+        result = freeze_bridge_cards(
+            research_root=args.research_root, binding_path=args.binding,
+            sources_path=args.sources, calendar_path=args.calendar, output=args.output)
+    elif args.command == "score":
+        result = llm_loop.score(args.frozen, args.nav, args.nav_manifest,
+                                args.as_of, args.output)
+    else:
+        result = feedback_from_scores(frozen_root=args.frozen_root,
+                                      scored_root=args.scored_root, output=args.output)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()
