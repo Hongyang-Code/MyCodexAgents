@@ -57,13 +57,15 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 
 `python -m fundpilot.conditional_dynamic --input INPUT.json --output RESULT.json` 接受已经在外部冻结的多截点决策和事件，直接交给现有 `EventSimulator`。它不调用 `run_dynamic`，也不改变 `run_dynamic`／`run_frozen_synthetic` 的 `synthetic_fixture` 门禁；真实响应不能改名为 synthetic。输入必须明确声明 `mode=conditional_historical`、`real_execution_verified=false`，逐截点提供不可变 `decision_ref`、既定 choice 和事件。hold 必须没有事件，adapter 不会为到账后执行偷偷生成 Order。
 
-`event_kernel_attested=true` 只表示调用方愿意让现有 typed kernel 检查这组条件研究事件，不证明真实成交。未知确认／到账历史只能写成预先冻结的情景时间，并在 limitations 保留；不得把情景改写成已核实交易。输出同时分开期末账面估值、可用现金／冻结资金／应收和 `conditional_liquidation_value`，后者固定标记为非已到账现金。
+`event_kernel_attested=true` 只表示调用方愿意让现有 typed kernel 检查这组条件研究事件，不证明真实成交。未知确认／到账历史只能写成预先冻结的情景时间，并在 limitations 保留；不得把情景改写成已核实交易。每个截点前只推进队列中不晚于该截点的结算，当前冻结决策只能提交自己的 Order，未来非 Order 事件入队；到明确 `end_at` 后仍未发生的事件保留 pending。输出同时分开期末账面估值、可用现金／冻结资金／应收和 `conditional_liquidation_value`，后者固定标记为非已到账现金。条件清算规则必须与资产一致，并在明确 `liquidation_at` 仍生效、已可用。
+
+CLI 的输入和输出必须位于 checkout 外、由当前用户拥有且组／其他用户无权限的私有目录。输入按私有普通文件读取；输出使用 `0600` exclusive create，既有路径和符号链接均拒绝，不先检查再覆盖。
 
 合成回归覆盖两个截点、hold 不生成交易、赎回确认后未到账资金不能申购、条件清算不等于现金，以及 CLI 子进程写出结果。该入口没有重新选择策略、评分或晋级。
 
 ## 仍未接通
 
-- 为经过授权的真实动态运行设计独立入口及预算／时间资格。当前端到端接线仍只接受合成 producer；未执行新模型请求，也未把历史生成内容包装成当时可用预测。原桥接和预算入口未改动。
+- 前瞻或真实成交动态运行仍未接通。当前已有条件历史冻结输入入口，但固定为 `real_execution_verified=false`，不把历史生成内容包装成当时可用预测；原桥接和预算入口未改动。
 - 可运行的不同数学／机器学习／神经网络策略适配器及其训练、输入资格和效果比较。测试中的权重来自明示的合成回调。
 - 通用目标权重到场外基金订单的规划器、逐批费率／取整／限购／QDII 日历和统一硬风险检查。本入口不把现有简化 Rule 的固定费率升级为完整真实执行器。
 - 成熟预测评分、错误归因、经验审查、跨任务恢复、重复运行幂等与私有不可变冻结的端到端连接。

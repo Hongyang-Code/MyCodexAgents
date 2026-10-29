@@ -11,11 +11,13 @@ import argparse
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from decimal import Decimal
+import heapq
 import hashlib
 import json
 from pathlib import Path
 
 from .backtest import Confirmation, EventSimulator, Order, Receipt, Rule
+from .upstream_bridge import read_private, write_bytes_new
 
 D = Decimal
 ZERO = D("0")
@@ -90,8 +92,29 @@ def replay(payload):
     decisions = payload.get("decisions")
     if not isinstance(decisions, list) or not decisions:
         raise ValueError("at least one frozen decision required")
+    end_at = _time(payload["end_at"])
+    liquidation_at = _time(payload["liquidation_at"])
+    if liquidation_at < end_at:
+        raise ValueError("conditional liquidation cannot precede replay end")
     last = None
-    trace = []
+    trace, applied_settlements, queue, sequence = [], [], [], 0
+
+    def enqueue(event, cutoff):
+        nonlocal sequence
+        if isinstance(event, Order):
+            raise ValueError("settlement queue cannot inject Orders")
+        if event.at <= cutoff:
+            raise ValueError("frozen settlement must follow its decision cutoff")
+        sequence += 1
+        heapq.heappush(queue, (event.at, sequence, event))
+
+    def advance(at):
+        while queue and queue[0][0] <= at:
+            _, _, event = heapq.heappop(queue)
+            sim.apply(event)
+            applied_settlements.append({"type": type(event).__name__,
+                                        **_plain(event.__dict__)})
+
     for row in decisions:
         cutoff = _time(row["cutoff"])
         if last is not None and cutoff <= last:
@@ -102,27 +125,35 @@ def replay(payload):
         events = row.get("events", [])
         if row["choice"] == "hold" and events:
             raise ValueError("hold decision cannot introduce events")
+        advance(cutoff)
         before = sim.state
-        applied = []
+        orders, scheduled = [], []
         for raw in events:
             event = _event(raw, cutoff)
-            if isinstance(event, Order) and event.at != cutoff:
-                raise ValueError("orders must bind their frozen cutoff")
-            sim.apply(event)
-            applied.append({"type": type(event).__name__, **_plain(event.__dict__)})
+            if isinstance(event, Order):
+                if event.at != cutoff:
+                    raise ValueError("orders must bind their frozen cutoff")
+                sim.apply(event)
+                orders.append({"type": type(event).__name__, **_plain(event.__dict__)})
+            else:
+                enqueue(event, cutoff)
+                scheduled.append({"type": type(event).__name__, **_plain(event.__dict__)})
         trace.append({
             "cutoff": cutoff.isoformat(), "decision_ref": row["decision_ref"],
             "choice": row["choice"], "reason": row.get("reason", ""),
-            "events": applied,
+            "orders": orders, "scheduled_settlements": scheduled,
             "state_before": _plain({"cash": before.cash,
                                      "reserved_cash": before.reserved_cash,
                                      "receivables": before.receivables,
                                      "shares": before.shares}),
-            "state_after": _plain({"cash": sim.state.cash,
-                                    "reserved_cash": sim.state.reserved_cash,
-                                    "receivables": sim.state.receivables,
-                                    "shares": sim.state.shares}),
+            "state_after_orders": _plain({"cash": sim.state.cash,
+                                           "reserved_cash": sim.state.reserved_cash,
+                                           "receivables": sim.state.receivables,
+                                           "shares": sim.state.shares}),
         })
+    if end_at < last:
+        raise ValueError("replay end cannot precede the final cutoff")
+    advance(end_at)
     marks = {key: D(value) for key, value in payload["end_marks"].items()}
     state = sim.state
     book = state.equity(marks)
@@ -133,6 +164,12 @@ def replay(payload):
         if units:
             rule_id = payload["liquidation_rule_ids"][instrument]
             rule = rule_by_id[rule_id]
+            if rule.instrument != instrument:
+                raise ValueError("conditional liquidation rule instrument mismatch")
+            if not rule.effective_from <= liquidation_at < rule.effective_to:
+                raise ValueError("conditional liquidation rule not effective at liquidation time")
+            if rule.available_at > liquidation_at:
+                raise ValueError("conditional liquidation rule unavailable at liquidation time")
             gross = units * marks[instrument]
             fee = gross * rule.sell_rate
             conditional += gross - fee
@@ -145,7 +182,14 @@ def replay(payload):
         "new_research": False, "new_model_inference": False,
         "new_strategy_evaluation": False, "real_execution_verified": False,
         "temporal_oos_qualified": False, "investment_qualified": False,
-        "decisions": trace, "terminal_state": _plain(state.__dict__),
+        "event_kernel_attested": True,
+        "event_kernel_attestation_scope": "conditional_internal_consistency_only",
+        "end_at": end_at.isoformat(), "liquidation_at": liquidation_at.isoformat(),
+        "decisions": trace, "applied_settlements": applied_settlements,
+        "terminal_state": _plain(state.__dict__),
+        "pending_events_after_end": [
+            {"type": type(item[2]).__name__, **_plain(item[2].__dict__)}
+            for item in sorted(queue)],
         "terminal_book_equity": str(book),
         "conditional_liquidation_value": str(conditional),
         "conditional_liquidation": _plain(liquidation),
@@ -162,12 +206,10 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     source = Path(args.input); target = Path(args.output)
-    if target.exists():
-        raise ValueError("output must not already exist")
-    payload = json.loads(source.read_text(encoding="utf-8"))
+    payload = json.loads(read_private(source))
     result = replay(payload)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    raw = (json.dumps(result, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode()
+    write_bytes_new(target, raw)
     print(json.dumps({"output": str(target), "result_sha256": result["result_sha256"]},
                      ensure_ascii=False))
 
