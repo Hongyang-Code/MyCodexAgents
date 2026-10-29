@@ -59,6 +59,19 @@ PYTHONPATH=FundPilot python -m unittest discover -s FundPilot/tests -q
 
 新输入应使用 `fundpilot.conditional-dynamic-replay.v2`。严格 v2 不接受调用方自填的 64 位哈希，也不允许用旧 choice v1 原件升级：每个决策必须指向 checkout 外私有目录中的原三研究 request/response/result 和独立 choice v2 request/response，由现有 `load_frozen_research`／`load_frozen_choice` 重新读取并核哈希。choice v2 的 prompt 同时绑定真实 replay state、完整合法候选内容（非 hold 权重非负、有限、唯一且合计为1；真正 hold 的 `target_weights=null`）以及 cutoff、decision_ref、当前 Order 意图。未来 Confirmation／Receipt 的价格和时间不属于当时选择输入，完整结算 tape 由 replay `input_sha256` 独立留痕。缺原件、同 ID 改权重、改截点或改 Order 均拒绝，不能输出 bound=true。旧 v1 文件仍可复现原数值，但输出明确标记 `legacy_unbound_decision_context=true`，不签认研究、状态、候选和选择已经连接。
 
+已经由宿主逐文件保存的多基金原件使用显式
+`fundpilot.complete-comparison-artifacts.v1` 布局，不能伪装成原单基金
+stable graph。其 research 子布局必须是
+`fundpilot.complete-comparison-research.v1`，同时绑定 bull／bear 原响应、
+manager request／response／receipt；choice 子布局必须是
+`fundpilot.complete-comparison-choice.v1`，绑定选择前完整计划表、原始
+request／response／receipt。provider 时间未知时保留
+`provider_time_unknown=true`，另存真实 `host_captured_at`，不能把宿主
+捕获时间改名为模型生成时间。后一截点复用旧研究必须显式写
+`research_reuse=explicit_frozen_reuse`，且研究截点不能晚于决策截点。
+输出会逐决策记录是否复用以及原提示的目标语义完整性；提示没有定义
+`flat` 的精确事件或 `p_up` 的事件／单位时保持缺口，不能靠回放补写。
+
 `event_kernel_attested=true` 只表示调用方愿意让现有 typed kernel 检查这组条件研究事件，不证明真实成交。未知确认／到账历史只能写成预先冻结的情景时间，并在 limitations 保留；不得把情景改写成已核实交易。每个截点前只推进队列中不晚于该截点的结算，当前冻结决策只能提交自己的 Order，未来非 Order 事件入队；到明确 `end_at` 后仍未发生的事件保留 pending。输出同时分开期末账面估值、可用现金／冻结资金／应收和 `conditional_liquidation_value`，后者固定标记为非已到账现金。条件清算规则必须与资产一致，并在明确 `liquidation_at` 仍生效、已可用。
 
 CLI 的输入和输出必须位于 checkout 外、由当前用户拥有且组／其他用户无权限的私有目录。输入按私有普通文件读取；输出使用 `0600` exclusive create，既有路径和符号链接均拒绝，不先检查再覆盖。

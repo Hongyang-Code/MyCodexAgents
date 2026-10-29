@@ -116,7 +116,119 @@ def bind_v2(value, root):
     return value
 
 
+def complete_case_v2(root):
+    value = fixture()
+    value.update(schema="fundpilot.conditional-dynamic-replay.v2",
+                 initial_cash="100", initial_shares={})
+    for row in value["decisions"]:
+        row["choice"] = "hold"; row["events"] = []
+    bull = root / "bull.json"; bear = root / "bear.json"
+    write_new(bull, {"role": "bull"}); write_new(bear, {"role": "bear"})
+    cutoff = value["decisions"][0]["cutoff"]
+    manager_prompt = "Directions are up|flat|down|abstain; p_up is number or null."
+    manager_request = root / "manager-request.json"
+    manager_response = root / "manager-response.json"
+    manager_receipt = root / "manager-receipt.json"
+    request_obj = {
+        "schema": "fundpilot.research-request.v2", "role": "manager",
+        "information_cutoff": cutoff, "captured_at": "2026-10-29T00:00:00+00:00",
+        "prompt": manager_prompt, "prompt_sha256": digest(manager_prompt.encode()),
+        "input_response_sha256": [digest(bull.read_bytes()), digest(bear.read_bytes())]}
+    write_new(manager_request, request_obj)
+    forecast = lambda h: {
+        "horizon": h, "direction": "abstain", "p_up": None,
+        "rationale": "fixture", "invalidation": "fixture"}
+    response_obj = {
+        "role": "manager", "funds": [
+            {"instrument": {"code": "A"}, "forecasts": [forecast(h) for h in (1, 5, 20)]},
+            {"instrument": {"code": "B"}, "forecasts": [forecast(h) for h in (1, 5, 20)]}]}
+    write_new(manager_response, response_obj)
+    write_new(manager_receipt, {
+        "request_sha256": digest(manager_request.read_bytes()),
+        "response_sha256": digest(manager_response.read_bytes()),
+        "prompt_sha256": request_obj["prompt_sha256"],
+        "host_captured_at": "2026-10-29T00:00:01+00:00",
+        "provider_generated_at": "unknown", "model_ref": "fixture-model"})
+    research = {
+        "schema": "fundpilot.complete-comparison-research.v1",
+        "information_cutoff": cutoff, "manager_request": str(manager_request),
+        "manager_response": str(manager_response), "manager_receipt": str(manager_receipt),
+        "bull_response": str(bull), "bear_response": str(bear)}
+    plans = [
+        {"candidate_id": "hold", "target_weights": None, "reason": "retain cash",
+         "fees": "0", "risk": "opportunity cost", "available": True,
+         "order_intents": []},
+        {"candidate_id": "target", "target_weights": [["A", "1"]],
+         "reason": "explicit build", "fees": "0", "risk": "market",
+         "available": True, "order_intents": []},
+        {"candidate_id": "minimum_variance", "target_weights": None,
+         "available": False, "unavailable_reason": "insufficient history",
+         "order_intents": None}]
+    for index, row in enumerate(value["decisions"]):
+        request = root / f"choice-request-{index}.json"
+        response = root / f"choice-response-{index}.json"
+        receipt = root / f"choice-receipt-{index}.json"
+        prompt = "Select one frozen candidate from the complete plan table."
+        request_obj = {
+            "schema": "fundpilot.final-choice-request.v2",
+            "cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
+            "captured_at": f"2026-10-29T00:00:0{2 + index * 2}+00:00",
+            "prompt": prompt, "prompt_sha256": digest(prompt.encode()),
+            "research_response_sha256": digest(manager_response.read_bytes()),
+            "state": {"cash": "100", "reserved_cash": "0",
+                      "receivables": {}, "shares": {}},
+            "candidate_plans": plans}
+        write_new(request, request_obj)
+        write_new(response, {
+            "schema": "fundpilot.final-choice-response.v2",
+            "selected_candidate_id": "hold", "reason": "fixture hold"})
+        write_new(receipt, {
+            "request_sha256": digest(request.read_bytes()),
+            "response_sha256": digest(response.read_bytes()),
+            "prompt_sha256": request_obj["prompt_sha256"],
+            "host_captured_at": f"2026-10-29T00:00:0{3 + index * 2}+00:00",
+            "provider_generated_at": None, "model_ref": "fixture-model"})
+        row["candidate_plans"] = plans
+        row["artifacts"] = {
+            "schema": "fundpilot.complete-comparison-artifacts.v1",
+            "research": research,
+            "choice": {"schema": "fundpilot.complete-comparison-choice.v1",
+                       "request": str(request), "response": str(response),
+                       "receipt": str(receipt)}}
+        if index:
+            row["research_reuse"] = "explicit_frozen_reuse"
+    return value
+
+
 class ConditionalDynamicTests(unittest.TestCase):
+    def test_complete_comparison_layout_replays_same_hold_choices(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = complete_case_v2(root)
+            result = replay(value)
+            self.assertEqual([row["choice"] for row in result["decisions"]],
+                             ["hold", "hold"])
+            self.assertTrue(result["saved_artifacts_verified"])
+            self.assertFalse(result["decisions"][0]["research_reused"])
+            self.assertTrue(result["decisions"][1]["research_reused"])
+            self.assertTrue(result["decisions"][0]["provider_time_unknown"])
+            semantic = result["decisions"][0]["semantic_contract_status"]
+            self.assertFalse(semantic["complete"])
+            self.assertEqual(
+                semantic["missing"],
+                ["flat_exact_zero_definition", "p_up_event_and_unit_definition"])
+
+    def test_complete_comparison_layout_rejects_changed_raw_response(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = complete_case_v2(root)
+            target = Path(value["decisions"][0]["artifacts"]["choice"]["response"])
+            target.write_text('{"schema":"fundpilot.final-choice-response.v2",'
+                              '"selected_candidate_id":"target","reason":"changed"}')
+            target.chmod(0o600)
+            with self.assertRaisesRegex(ValueError, "receipt byte binding"):
+                replay(value)
+
     def test_v2_binds_research_candidates_choice_and_actual_state(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); os.chmod(root, 0o700)

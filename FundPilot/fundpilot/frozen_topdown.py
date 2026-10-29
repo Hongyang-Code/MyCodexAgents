@@ -22,11 +22,13 @@ from .upstream_bridge import PIN, SCOPE, checked_time, digest, private_root, rea
 class FrozenProvenance:
     producer: str
     model_ref: str
-    generated_at: datetime
+    generated_at: datetime | None
     prompt_sha256: str
     response_sha256: str
     source_file: str
     replayed_frozen_output: bool = True
+    host_captured_at: datetime | None = None
+    provider_time_unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,7 @@ class FrozenResearch:
     provenance: FrozenProvenance
     choice: None = None
     choice_status: str = "missing_separate_final_choice"
+    semantic_contract_status: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +183,169 @@ def _manager_trend(content, cutoff, response_sha):
                        for h in (1, 5, 20))
     return Trend("frozen-bridge-" + response_sha[:16], cutoff, thesis,
                  ("response-3.json#forecasts",), tuple(invalidations))
+
+
+def _complete_manager_trend(value, cutoff, response_sha):
+    """Map the explicit multi-fund manager schema without inventing a single fund."""
+    if value.get("role") != "manager" or not isinstance(value.get("funds"), list):
+        raise ValueError("multi-fund manager response required")
+    rows, invalidations = [], []
+    for fund in value["funds"]:
+        instrument = fund.get("instrument")
+        forecasts = fund.get("forecasts")
+        if (not isinstance(instrument, dict) or
+                not isinstance(instrument.get("code"), str) or
+                not isinstance(forecasts, list) or len(forecasts) != 3 or
+                {item.get("horizon") for item in forecasts if isinstance(item, dict)}
+                != {1, 5, 20}):
+            raise ValueError("complete multi-fund 1/5/20 forecasts required")
+        code = instrument["code"]
+        for item in forecasts:
+            if item.get("direction") not in {"up", "flat", "down", "abstain"}:
+                raise ValueError("multi-fund forecast direction invalid")
+            for key in ("rationale", "invalidation"):
+                if not isinstance(item.get(key), str) or not item[key].strip():
+                    raise ValueError("multi-fund forecast rationale and invalidation required")
+            rows.append(f"{code}/h{item['horizon']}:{item['direction']} — {item['rationale']}")
+            invalidations.append(f"{code}/h{item['horizon']}:{item['invalidation']}")
+    if len(rows) != 6:
+        raise ValueError("exactly two funds with 1/5/20 forecasts required")
+    return Trend("complete-comparison-" + response_sha[:16], cutoff, "; ".join(rows),
+                 ("manager-response#funds",), tuple(invalidations))
+
+
+def _receipt_file(path, label):
+    raw = read_private(Path(path))
+    return _object(raw, label), raw
+
+
+def load_complete_comparison_research(layout, expected_cutoff):
+    """Strictly consume the explicit host-captured multi-fund artifact layout.
+
+    Provider generation time may remain unknown.  The host capture is retained
+    separately and is never relabelled as provider generation time.
+    """
+    if layout.get("schema") != "fundpilot.complete-comparison-research.v1":
+        raise ValueError("explicit complete-comparison research schema required")
+    required = ("manager_request", "manager_response", "manager_receipt",
+                "bull_response", "bear_response")
+    if any(not isinstance(layout.get(key), str) or not layout[key] for key in required):
+        raise ValueError("complete-comparison research artifact paths incomplete")
+    request_raw = read_private(Path(layout["manager_request"]))
+    response_raw = read_private(Path(layout["manager_response"]))
+    request = _object(request_raw, "manager request")
+    response = _object(response_raw, "manager response")
+    receipt, _ = _receipt_file(layout["manager_receipt"], "manager receipt")
+    if request.get("schema") != "fundpilot.research-request.v2" or request.get("role") != "manager":
+        raise ValueError("multi-fund manager request v2 required")
+    cutoff = _cutoff(request.get("information_cutoff"))
+    if not isinstance(expected_cutoff, datetime) or expected_cutoff != cutoff:
+        raise ValueError("expected cutoff must equal multi-fund research cutoff")
+    prompt = request.get("prompt")
+    if not isinstance(prompt, str) or digest(prompt.encode()) != request.get("prompt_sha256"):
+        raise ValueError("manager prompt hash mismatch")
+    request_sha = digest(request_raw); response_sha = digest(response_raw)
+    if (receipt.get("request_sha256") != request_sha or
+            receipt.get("response_sha256") != response_sha or
+            receipt.get("prompt_sha256") != request["prompt_sha256"]):
+        raise ValueError("manager receipt byte binding mismatch")
+    supporting = [digest(read_private(Path(layout[key])))
+                  for key in ("bull_response", "bear_response")]
+    if request.get("input_response_sha256") != supporting:
+        raise ValueError("manager request does not bind the supplied bull/bear responses")
+    captured = checked_time(request.get("captured_at", ""))
+    host_captured = checked_time(receipt.get("host_captured_at", ""))
+    if host_captured < captured or host_captured > datetime.now(timezone.utc):
+        raise ValueError("manager host capture time mismatch")
+    provider_time = receipt.get("provider_generated_at")
+    if provider_time not in (None, "unknown"):
+        raise ValueError("complete-comparison adapter only accepts explicit unknown provider time")
+    model_ref = receipt.get("model_ref")
+    if not isinstance(model_ref, str) or not model_ref.strip():
+        raise ValueError("manager model reference missing")
+    trend = _complete_manager_trend(response, cutoff, response_sha)
+    lower_prompt = prompt.lower()
+    flat_exact = ("flat means exactly zero" in lower_prompt or
+                  "flat=exactly zero" in lower_prompt or
+                  "flat = exactly zero" in lower_prompt)
+    p_up_defined = ("p_up means" in lower_prompt or "p_up=" in lower_prompt)
+    semantic = {
+        "complete": flat_exact and p_up_defined,
+        "flat_exact_zero_defined_in_prompt": flat_exact,
+        "p_up_event_and_unit_defined_in_prompt": p_up_defined,
+        "missing": [name for name, present in (
+            ("flat_exact_zero_definition", flat_exact),
+            ("p_up_event_and_unit_definition", p_up_defined)) if not present],
+    }
+    return FrozenResearch(
+        trend,
+        FrozenProvenance("actual_current_llm", model_ref, None,
+                         request["prompt_sha256"], response_sha,
+                         Path(layout["manager_response"]).name,
+                         host_captured_at=host_captured, provider_time_unknown=True),
+        semantic_contract_status=semantic)
+
+
+def load_complete_comparison_choice(layout, research, candidates, state,
+                                    decision_envelope):
+    """Validate an original pre-choice request, raw selection and host receipt."""
+    if layout.get("schema") != "fundpilot.complete-comparison-choice.v1":
+        raise ValueError("explicit complete-comparison choice schema required")
+    required = ("request", "response", "receipt")
+    if any(not isinstance(layout.get(key), str) or not layout[key] for key in required):
+        raise ValueError("complete-comparison choice artifact paths incomplete")
+    request_raw = read_private(Path(layout["request"]))
+    response_raw = read_private(Path(layout["response"]))
+    request = _object(request_raw, "choice request")
+    response = _object(response_raw, "choice response")
+    receipt, _ = _receipt_file(layout["receipt"], "choice receipt")
+    if (request.get("schema") != "fundpilot.final-choice-request.v2" or
+            response.get("schema") != "fundpilot.final-choice-response.v2"):
+        raise ValueError("complete-comparison final choice v2 required")
+    prompt = request.get("prompt")
+    if not isinstance(prompt, str) or digest(prompt.encode()) != request.get("prompt_sha256"):
+        raise ValueError("choice prompt hash mismatch")
+    request_sha = digest(request_raw); response_sha = digest(response_raw)
+    receipt_request = receipt.get("request_sha256", receipt.get("request", {}).get("sha256"))
+    receipt_response = receipt.get("response_sha256", receipt.get("response", {}).get("sha256"))
+    receipt_prompt = receipt.get("prompt_sha256", receipt.get("prompt", {}).get("sha256"))
+    if (receipt_request != request_sha or receipt_response != response_sha or
+            receipt_prompt != request["prompt_sha256"]):
+        raise ValueError("choice receipt byte binding mismatch")
+    captured = checked_time(request.get("captured_at", ""))
+    host_captured = checked_time(receipt.get("host_captured_at", ""))
+    if host_captured < captured or host_captured > datetime.now(timezone.utc):
+        raise ValueError("choice host capture time mismatch")
+    provider_time = receipt.get("provider_generated_at")
+    if provider_time not in (None, "unknown"):
+        raise ValueError("complete-comparison adapter only accepts explicit unknown provider time")
+    if request.get("research_response_sha256") != research.provenance.response_sha256:
+        raise ValueError("choice request research response binding mismatch")
+    if request.get("cutoff") != decision_envelope.get("cutoff") or (
+            request.get("decision_ref") != decision_envelope.get("decision_ref")):
+        raise ValueError("choice cutoff or decision reference mismatch")
+    if request.get("state") != _plain({
+            "cash": state.cash, "reserved_cash": state.reserved_cash,
+            "receivables": state.receivables, "shares": state.shares}):
+        raise ValueError("choice state mismatch")
+    if request.get("candidate_plans") != decision_envelope.get("candidate_plans"):
+        raise ValueError("choice candidate plan table mismatch")
+    candidate_ids = [candidate.candidate_id for candidate in candidates]
+    selected = response.get("selected_candidate_id")
+    if selected not in candidate_ids:
+        raise ValueError("choice response selected unknown candidate")
+    reason = response.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("choice response reason missing")
+    model_ref = receipt.get("model_ref")
+    if not isinstance(model_ref, str) or not model_ref.strip():
+        raise ValueError("choice model reference missing")
+    return FrozenChoice(
+        Choice(((selected, Decimal("1")),), reason),
+        FrozenProvenance("actual_current_llm", model_ref, None,
+                         request["prompt_sha256"], response_sha,
+                         Path(layout["response"]).name,
+                         host_captured_at=host_captured, provider_time_unknown=True))
 
 
 def load_frozen_research(root, expected_cutoff):

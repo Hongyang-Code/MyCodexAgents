@@ -18,7 +18,12 @@ from pathlib import Path
 
 from .backtest import Confirmation, EventSimulator, Order, Receipt, Rule
 from .dynamic_topdown import Candidate, _weights, trend_digest
-from .frozen_topdown import load_frozen_choice, load_frozen_research
+from .frozen_topdown import (
+    load_complete_comparison_choice,
+    load_complete_comparison_research,
+    load_frozen_choice,
+    load_frozen_research,
+)
 from .upstream_bridge import read_private, write_bytes_new
 
 D = Decimal
@@ -67,6 +72,11 @@ def _candidates(rows, trend):
         if not isinstance(row, dict) or not isinstance(row.get("candidate_id"), str):
             raise ValueError("complete candidate identity required")
         weights = row.get("target_weights")
+        available = row.get("available", True)
+        if available is False:
+            if weights is not None or not isinstance(row.get("unavailable_reason"), str):
+                raise ValueError("unavailable candidate requires null weights and a reason")
+            continue
         if weights is not None:
             if (not isinstance(weights, list) or not weights or
                     any(not isinstance(item, list) or len(item) != 2 for item in weights)):
@@ -118,27 +128,72 @@ def _candidate_plans(rows):
     return result
 
 
+def _complete_case_plans(rows):
+    """Validate and preserve the original readable plan table byte semantics."""
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("complete-comparison candidate plan table required")
+    ids = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("candidate_id"), str):
+            raise ValueError("complete-comparison candidate identity required")
+        ids.append(row["candidate_id"])
+        available = row.get("available")
+        intents = row.get("order_intents")
+        if available is True:
+            if not isinstance(intents, list):
+                raise ValueError("available candidate requires order intents")
+        elif available is False:
+            if intents is not None or not isinstance(row.get("unavailable_reason"), str):
+                raise ValueError("unavailable candidate requires a reason and no order intents")
+        else:
+            raise ValueError("complete-comparison candidate availability required")
+    if len(ids) != len(set(ids)) or "hold" not in ids:
+        raise ValueError("unique complete-comparison candidates including hold required")
+    return rows
+
+
 def _strict_decision(row, state, cutoff):
     """Verify real saved research and selector artifacts; never trust supplied hashes."""
     artifacts = row.get("artifacts")
     if not isinstance(artifacts, dict):
         raise ValueError("strict v2 requires saved research and choice artifacts")
-    required = ("research_root", "choice_request", "choice_response")
-    if any(not isinstance(artifacts.get(key), str) or not artifacts[key] for key in required):
-        raise ValueError("strict v2 saved artifact paths are incomplete")
-    frozen = load_frozen_research(Path(artifacts["research_root"]), cutoff)
-    candidates = _candidates(row.get("candidates"), frozen.trend)
-    plans = _candidate_plans(row.get("candidates"))
+    complete_schema = artifacts.get("schema") == "fundpilot.complete-comparison-artifacts.v1"
+    if complete_schema:
+        research_layout = artifacts.get("research")
+        choice_layout = artifacts.get("choice")
+        if not isinstance(research_layout, dict) or not isinstance(choice_layout, dict):
+            raise ValueError("complete-comparison research and choice layouts required")
+        research_cutoff = _time(research_layout.get("information_cutoff"))
+        if research_cutoff > cutoff:
+            raise ValueError("reused research cannot postdate the decision")
+        reused = research_cutoff < cutoff
+        if reused and row.get("research_reuse") != "explicit_frozen_reuse":
+            raise ValueError("later decision requires explicit frozen research reuse marker")
+        frozen = load_complete_comparison_research(research_layout, research_cutoff)
+        plans = _complete_case_plans(row.get("candidate_plans"))
+        candidates = _candidates(plans, frozen.trend)
+    else:
+        required = ("research_root", "choice_request", "choice_response")
+        if any(not isinstance(artifacts.get(key), str) or not artifacts[key] for key in required):
+            raise ValueError("strict v2 saved artifact paths are incomplete")
+        frozen = load_frozen_research(Path(artifacts["research_root"]), cutoff)
+        candidates = _candidates(row.get("candidates"), frozen.trend)
+        plans = _candidate_plans(row.get("candidates"))
+        reused = False
     envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
                 "candidate_plans": plans}
-    selected = load_frozen_choice(
-        Path(artifacts["choice_request"]), Path(artifacts["choice_response"]),
-        frozen.trend, candidates, state, envelope,
-        required_schema="fundpilot.final-choice-request.v2")
+    if complete_schema:
+        selected = load_complete_comparison_choice(
+            choice_layout, frozen, candidates, state, envelope)
+    else:
+        selected = load_frozen_choice(
+            Path(artifacts["choice_request"]), Path(artifacts["choice_response"]),
+            frozen.trend, candidates, state, envelope,
+            required_schema="fundpilot.final-choice-request.v2")
     if selected.choice.components != ((row["choice"], D("1")),):
         raise ValueError("saved final choice does not exactly match frozen replay choice")
     selected_plan = next(item for item in plans if item["candidate_id"] == row["choice"])
-    if selected_plan["unavailable_reason"] is not None:
+    if selected_plan.get("unavailable_reason") is not None:
         raise ValueError("saved final choice selected an unavailable candidate")
     if selected_plan["order_intents"] != _order_intents(row):
         raise ValueError("actual orders differ from the pre-choice candidate plan")
@@ -151,6 +206,9 @@ def _strict_decision(row, state, cutoff):
             "state": _state_payload(state), "decision": envelope}),
         "research_response_sha256": frozen.provenance.response_sha256,
         "choice_response_sha256": selected.provenance.response_sha256,
+        "research_reused": reused,
+        "provider_time_unknown": frozen.provenance.provider_time_unknown,
+        "semantic_contract_status": frozen.semantic_contract_status,
     }
 
 
@@ -252,6 +310,9 @@ def replay(payload):
             "decision_context_sha256": binding["binding_sha256"] if binding else None,
             "research_response_sha256": binding["research_response_sha256"] if binding else None,
             "choice_response_sha256": binding["choice_response_sha256"] if binding else None,
+            "research_reused": binding["research_reused"] if binding else False,
+            "provider_time_unknown": binding["provider_time_unknown"] if binding else False,
+            "semantic_contract_status": binding["semantic_contract_status"] if binding else None,
             "state_after_orders": _plain({"cash": sim.state.cash,
                                            "reserved_cash": sim.state.reserved_cash,
                                            "receivables": sim.state.receivables,
