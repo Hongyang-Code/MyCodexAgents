@@ -3,7 +3,10 @@ import csv
 from dataclasses import replace
 from datetime import date, timedelta
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -210,6 +213,37 @@ class TrendFeedbackTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as stopped:
                     trend_feedback.main()
                 self.assertEqual(stopped.exception.code, 0)
+
+    def test_cli_subprocess_runs_complete_synthetic_freeze_score_feedback(self):
+        package_root = Path(__file__).resolve().parents[1]
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(package_root) + os.pathsep + env.get("PYTHONPATH", "")
+        def run(arguments):
+            return subprocess.run(
+                [sys.executable, "-m", "fundpilot.trend_feedback", *arguments],
+                cwd=package_root, env=env, text=True, capture_output=True,
+                check=True, timeout=20)
+        frozen = run(["freeze", "--research-root", str(self.graph),
+                      "--binding", str(self.root / "binding.json"),
+                      "--sources", str(self.root / "sources.json"),
+                      "--calendar", str(self.root / "calendar.json"),
+                      "--output", str(self.root / "cli-frozen")])
+        scored = run(["score", "--frozen", str(self.root / "cli-frozen"),
+                      "--nav", str(self.nav),
+                      "--nav-manifest", str(self.root / "nav-manifest.json"),
+                      "--as-of", llm_loop.now(),
+                      "--output", str(self.root / "cli-scored")])
+        fed_back = run(["feedback", "--frozen-root", str(self.root / "cli-frozen"),
+                        "--scored-root", str(self.root / "cli-scored"),
+                        "--output", str(self.root / "cli-feedback")])
+        receipt, score, feedback = [json.loads(result.stdout)
+                                    for result in (frozen, scored, fed_back)]
+        self.assertFalse(receipt["truth_loaded_by_freeze"])
+        self.assertEqual(score["metrics"]["total"], 3)
+        self.assertEqual(feedback["counts"],
+                         {"correct": 1, "incorrect": 1, "abstained": 1,
+                          "pending": 0, "missing": 0})
+        self.assertTrue((self.root / "cli-feedback/manifest.json").is_file())
 
     def test_score_manifest_cannot_refer_to_other_frozen_input(self):
         self.freeze()
