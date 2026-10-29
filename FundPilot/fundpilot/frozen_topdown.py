@@ -73,6 +73,32 @@ def choice_context(candidates, state, decision_envelope=None):
     }
 
 
+def build_choice_request(trend, candidates, state, decision_envelope, captured_at):
+    """Build the immutable, human-readable v2 selector request *before* choice."""
+    context = choice_context(candidates, state, decision_envelope)
+    plans = decision_envelope.get("candidate_plans")
+    if not isinstance(plans, list) or not plans:
+        raise ValueError("v2 final choice requires complete candidate plans")
+    unsigned = {
+        "schema": "fundpilot.final-choice-request.v2",
+        "trend_digest": trend_digest(trend),
+        "candidate_ids": [candidate.candidate_id for candidate in candidates],
+        **context,
+        "trend": _plain(asdict(trend)),
+        "state": _plain({"cash": state.cash, "reserved_cash": state.reserved_cash,
+                         "receivables": state.receivables, "shares": state.shares}),
+        "candidate_plans": _plain(plans),
+        "decision": _plain({key: decision_envelope[key]
+                            for key in ("cutoff", "decision_ref")}),
+    }
+    body = json.dumps(unsigned, ensure_ascii=False, sort_keys=True, indent=2,
+                      allow_nan=False)
+    prompt = ("Select exactly one frozen candidate from this pre-choice plan table. "
+              "Do not invent or alter orders.\n" + body)
+    return {**unsigned, "prompt": prompt, "prompt_sha256": digest(prompt.encode()),
+            "captured_at": captured_at}
+
+
 def _object(raw, label):
     try:
         value = json.loads(raw)
@@ -217,7 +243,15 @@ def load_frozen_choice(request_path, response_path, trend, candidates, state=Non
             raise ValueError("v2 final choice requires current state")
         fields += ["candidate_digest", "state_digest", "decision_digest"]
     unsigned = {key: request[key] for key in fields if key in request}
-    expected_prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
+    if schema.endswith(".v2"):
+        expected_request = build_choice_request(
+            trend, candidates, state, decision_envelope, request.get("captured_at"))
+        expected_prompt = expected_request["prompt_sha256"]
+        visible = ("trend", "state", "candidate_plans", "decision", "prompt")
+        if any(request.get(key) != expected_request[key] for key in visible):
+            raise ValueError("final choice readable prompt or plan binding mismatch")
+    else:
+        expected_prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
     if request.get("prompt_sha256") != expected_prompt or response.get("prompt_sha256") != expected_prompt:
         raise ValueError("final choice prompt binding mismatch")
     if request.get("trend_digest") != trend_digest(trend):

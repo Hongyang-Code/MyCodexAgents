@@ -13,7 +13,8 @@ import unittest
 
 from fundpilot.dynamic_topdown import Candidate, Datum, ExecutionPlan, Mark, trend_digest
 from fundpilot.frozen_topdown import (
-    choice_context, load_frozen_research, load_frozen_choice, run_frozen_synthetic,
+    build_choice_request, choice_context, load_frozen_research, load_frozen_choice,
+    run_frozen_synthetic,
 )
 from fundpilot.backtest import State
 from fundpilot.upstream_bridge import PIN, SCOPE, digest, write_new
@@ -169,35 +170,36 @@ class FrozenResearchTests(unittest.TestCase):
             candidates = (Candidate("hold", trend_digest(frozen.trend), None, "hold"),
                           Candidate("low", trend_digest(frozen.trend),
                                     (("CASH", D(1)),), "low"))
-            unsigned = {"schema": "fundpilot.final-choice-request.v2",
-                        "trend_digest": trend_digest(frozen.trend),
-                        "candidate_ids": ["hold", "low"],
-                        **choice_context(candidates, state, {
-                            "cutoff": cutoff.isoformat(), "decision_ref": "fixture-choice",
-                            "events": []})}
-            prompt = hashlib.sha256(json.dumps(
-                unsigned, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            plans = [
+                {"candidate_id": "hold", "target_weights": None, "reason": "hold",
+                 "fees": "0", "risk": "unchanged", "order_intents": [],
+                 "unavailable_reason": None},
+                {"candidate_id": "low", "target_weights": [["CASH", "1"]],
+                 "reason": "low", "fees": "0", "risk": "cash",
+                 "order_intents": [], "unavailable_reason": None}]
+            envelope = {"cutoff": cutoff.isoformat(), "decision_ref": "fixture-choice",
+                        "candidate_plans": plans}
+            request_obj = build_choice_request(frozen.trend, candidates, state, envelope,
+                                               "2026-10-27T00:00:03+00:00")
+            prompt = request_obj["prompt_sha256"]
             request = root / "choice-request.json"; response = root / "choice-response.json"
-            write_new(request, {**unsigned, "prompt_sha256": prompt,
-                                "captured_at": "2026-10-27T00:00:03+00:00"})
+            write_new(request, request_obj)
             write_new(response, {"schema": "fundpilot.final-choice-response.v2",
                       "producer": "synthetic_fixture", "model_ref": "SYNTHETIC_NOT_LLM",
                       "generated_at": "2026-10-27T00:00:04+00:00",
                       "prompt_sha256": prompt,
                       "components": [{"candidate_id": "low", "weight": "1"}],
                       "reason": "fixture"})
-            envelope = {"cutoff": cutoff.isoformat(), "decision_ref": "fixture-choice",
-                        "events": []}
             load_frozen_choice(request, response, frozen.trend, candidates, state, envelope)
             changed = (candidates[0], Candidate("low", trend_digest(frozen.trend),
                                                (("CASH", D(".5")), ("SYNTH", D(".5"))), "low"))
-            with self.assertRaisesRegex(ValueError, "content or state"):
+            with self.assertRaisesRegex(ValueError, "binding mismatch"):
                 load_frozen_choice(request, response, frozen.trend, changed, state, envelope)
-            with self.assertRaisesRegex(ValueError, "content or state"):
+            with self.assertRaisesRegex(ValueError, "binding mismatch"):
                 load_frozen_choice(request, response, frozen.trend, candidates,
                                    State(cash=D("99")), envelope)
-            changed_envelope = dict(envelope, events=[{"type": "order"}])
-            with self.assertRaisesRegex(ValueError, "content or state"):
+            changed_envelope = dict(envelope, decision_ref="changed-choice")
+            with self.assertRaisesRegex(ValueError, "binding mismatch"):
                 load_frozen_choice(request, response, frozen.trend, candidates, state,
                                    changed_envelope)
 

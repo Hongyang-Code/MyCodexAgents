@@ -11,7 +11,7 @@ from decimal import Decimal
 from fundpilot.backtest import State
 from fundpilot.conditional_dynamic import _order_intents, replay
 from fundpilot.dynamic_topdown import Candidate, trend_digest
-from fundpilot.frozen_topdown import choice_context, load_frozen_research
+from fundpilot.frozen_topdown import build_choice_request, load_frozen_research
 from fundpilot.upstream_bridge import PIN, SCOPE, digest, write_new
 
 
@@ -87,26 +87,30 @@ def bind_v2(value, root):
         state = State(cash=Decimal(states[index]["cash"]),
                       reserved_cash=Decimal(states[index]["reserved_cash"]),
                       shares={k: Decimal(v) for k, v in states[index]["shares"].items()})
+        frozen_rows = [
+            {"candidate_id": "hold", "target_weights": None, "reason": "retain current state",
+             "fees": "0", "risk": "state unchanged", "plan": {"order_intents": []}},
+            {"candidate_id": "target", "target_weights": [["A", "1"]],
+             "reason": "explicit target", "fees": "rule based", "risk": "market",
+             "plan": {"order_intents": _order_intents(row)}}]
+        plans = [{"candidate_id": item["candidate_id"], "target_weights": item["target_weights"],
+                  "reason": item["reason"], "fees": item["fees"], "risk": item["risk"],
+                  "order_intents": item["plan"]["order_intents"], "unavailable_reason": None}
+                 for item in frozen_rows]
         envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
-                    "order_intents": _order_intents(row)}
-        unsigned = {"schema": "fundpilot.final-choice-request.v2",
-                    "trend_digest": trend_digest(frozen.trend),
-                    "candidate_ids": ["hold", "target"],
-                    **choice_context(candidates, state, envelope)}
-        prompt = digest(json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode())
+                    "candidate_plans": plans}
         request = root / f"choice-request-{index}.json"
         response = root / f"choice-response-{index}.json"
-        write_new(request, {**unsigned, "prompt_sha256": prompt,
-                            "captured_at": "2026-10-27T00:00:03+00:00"})
+        request_obj = build_choice_request(frozen.trend, candidates, state, envelope,
+                                           "2026-10-27T00:00:03+00:00")
+        prompt = request_obj["prompt_sha256"]
+        write_new(request, request_obj)
         write_new(response, {"schema": "fundpilot.final-choice-response.v2",
                   "producer": "synthetic_fixture", "model_ref": "SYNTHETIC_NOT_LLM",
                   "generated_at": "2026-10-27T00:00:04+00:00", "prompt_sha256": prompt,
                   "components": [{"candidate_id": row["choice"], "weight": "1"}],
                   "reason": "fixture"})
-        row["candidates"] = [
-            {"candidate_id": "hold", "target_weights": None, "reason": "retain current state"},
-            {"candidate_id": "target", "target_weights": [["A", "1"]],
-             "reason": "explicit target"}]
+        row["candidates"] = frozen_rows
         row["artifacts"] = {"research_root": str(graph), "choice_request": str(request),
                             "choice_response": str(response)}
     return value
@@ -121,6 +125,24 @@ class ConditionalDynamicTests(unittest.TestCase):
             self.assertTrue(result["decision_context_bound"])
             self.assertTrue(result["saved_artifacts_verified"])
             self.assertTrue(all(row["decision_context_sha256"] for row in result["decisions"]))
+
+    def test_prechoice_request_supports_hold_without_rewrite(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td); os.chmod(root, 0o700)
+            value = bind_v2(fixture(), root)
+            row = value["decisions"][0]
+            request = Path(row["artifacts"]["choice_request"])
+            before = request.read_bytes()
+            response = Path(row["artifacts"]["choice_response"])
+            obj = json.loads(response.read_text())
+            obj["components"] = [{"candidate_id": "hold", "weight": "1"}]
+            response.write_text(json.dumps(obj)); response.chmod(0o600)
+            row["choice"] = "hold"; row["events"] = []
+            value["decisions"] = [row]
+            result = replay(value)
+            self.assertEqual(result["decisions"][0]["choice"], "hold")
+            self.assertEqual(result["decisions"][0]["orders"], [])
+            self.assertEqual(request.read_bytes(), before)
 
     def test_v2_rejects_missing_or_forged_artifact(self):
         with tempfile.TemporaryDirectory() as td:

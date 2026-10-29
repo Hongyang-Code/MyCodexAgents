@@ -97,6 +97,27 @@ def _order_intents(row):
             for event in row.get("events", []) if event.get("type") == "order"]
 
 
+def _candidate_plans(rows):
+    result = []
+    for row in rows:
+        plan = row.get("plan")
+        if not isinstance(plan, dict):
+            raise ValueError("each candidate requires a frozen executable plan")
+        intents = plan.get("order_intents")
+        unavailable = plan.get("unavailable_reason")
+        if (intents is None) == (unavailable is None):
+            raise ValueError("candidate plan requires orders or unavailable reason")
+        if intents is not None and (not isinstance(intents, list) or
+                                    any(not isinstance(item, dict) for item in intents)):
+            raise ValueError("candidate order intents must be a complete list")
+        result.append({"candidate_id": row["candidate_id"],
+                       "target_weights": row.get("target_weights"),
+                       "reason": row["reason"], "fees": row.get("fees"),
+                       "risk": row.get("risk"), "order_intents": intents,
+                       "unavailable_reason": unavailable})
+    return result
+
+
 def _strict_decision(row, state, cutoff):
     """Verify real saved research and selector artifacts; never trust supplied hashes."""
     artifacts = row.get("artifacts")
@@ -107,14 +128,20 @@ def _strict_decision(row, state, cutoff):
         raise ValueError("strict v2 saved artifact paths are incomplete")
     frozen = load_frozen_research(Path(artifacts["research_root"]), cutoff)
     candidates = _candidates(row.get("candidates"), frozen.trend)
+    plans = _candidate_plans(row.get("candidates"))
     envelope = {"cutoff": row["cutoff"], "decision_ref": row["decision_ref"],
-                "order_intents": _order_intents(row)}
+                "candidate_plans": plans}
     selected = load_frozen_choice(
         Path(artifacts["choice_request"]), Path(artifacts["choice_response"]),
         frozen.trend, candidates, state, envelope,
         required_schema="fundpilot.final-choice-request.v2")
     if selected.choice.components != ((row["choice"], D("1")),):
         raise ValueError("saved final choice does not exactly match frozen replay choice")
+    selected_plan = next(item for item in plans if item["candidate_id"] == row["choice"])
+    if selected_plan["unavailable_reason"] is not None:
+        raise ValueError("saved final choice selected an unavailable candidate")
+    if selected_plan["order_intents"] != _order_intents(row):
+        raise ValueError("actual orders differ from the pre-choice candidate plan")
     return {
         "binding_sha256": _digest({
             "trend": trend_digest(frozen.trend),
